@@ -1,0 +1,9 @@
+/obj/
+/lib/
+/bin/
+/alire/
+/config/
+/vendor/librdkafka-build/
+/vendor/librdkafka-install/
+
+/.config/

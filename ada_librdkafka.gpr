@@ -1,0 +1,35 @@
+with "config/ada_librdkafka_config.gpr";
+project Ada_Librdkafka is
+   for Languages use ("Ada", "C");
+
+   for Library_Name use "Ada_Librdkafka";
+   for Library_Version use Project'Library_Name & ".so." & Ada_Librdkafka_Config.Crate_Version;
+
+   for Source_Dirs use ("src/", "config/");
+   for Object_Dir use "obj/" & Ada_Librdkafka_Config.Build_Profile;
+   for Create_Missing_Dirs use "True";
+   for Library_Dir use "lib";
+   Librdkafka_Prefix := external ("LIBRDKAFKA_PREFIX", Ada_Librdkafka'Project_Dir & "vendor/librdkafka-install");
+
+   type Library_Type_Type is ("relocatable", "static", "static-pic");
+   Library_Type : Library_Type_Type :=
+     external ("ADA_LIBRDKAFKA_LIBRARY_TYPE", external ("LIBRARY_TYPE", "relocatable"));
+   for Library_Kind use Library_Type;
+   for Library_Options use
+     ("-L" & Librdkafka_Prefix & "/lib",
+      "-lrdkafka",
+      "-Wl,-rpath," & Librdkafka_Prefix & "/lib");
+
+   package Compiler is
+      for Default_Switches ("Ada") use Ada_Librdkafka_Config.Ada_Compiler_Switches;
+   end Compiler;
+
+   package Binder is
+      for Switches ("Ada") use ("-Es"); --  Symbolic traceback
+   end Binder;
+
+   package Install is
+      for Artifacts (".") use ("share");
+   end Install;
+
+end Ada_Librdkafka;

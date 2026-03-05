@@ -1,0 +1,8 @@
+with "../ada_librdkafka.gpr";
+
+project Real_Broker_E2E is
+   for Source_Dirs use (".");
+   for Object_Dir use "../obj/real-e2e";
+   for Exec_Dir use "../bin";
+   for Main use ("real_broker_e2e.adb");
+end Real_Broker_E2E;

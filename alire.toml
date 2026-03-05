@@ -1,0 +1,9 @@
+name = "ada_librdkafka"
+description = "Ada bindings for librdkafka shared library"
+version = "0.1.0-dev"
+
+authors = ["Erik Example"]
+maintainers = ["Erik Example <erik@example.com>"]
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+website = ""
+tags = ["kafka", "bindings", "librdkafka"]
