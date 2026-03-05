@@ -1,5 +1,7 @@
 # ada_librdkafka
 
+***NOTE: THIS LIBRARY IS NOT PRODUCTION-READY YET. CONSIDER THIS A WIP***
+
 `ada_librdkafka` is an Alire-based Ada library crate that builds a shared library and wraps the core producer APIs from `librdkafka` in an idiomatic Ada interface.
 
 ## Features
