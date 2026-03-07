@@ -10,6 +10,7 @@ project Ada_Librdkafka is
    for Create_Missing_Dirs use "True";
    for Library_Dir use "lib";
    Librdkafka_Prefix := external ("LIBRDKAFKA_PREFIX", Ada_Librdkafka'Project_Dir & "vendor/librdkafka-install");
+   Librdkafka_Include := Librdkafka_Prefix & "/include";
 
    type Library_Type_Type is ("relocatable", "static", "static-pic");
    Library_Type : Library_Type_Type :=
@@ -22,6 +23,7 @@ project Ada_Librdkafka is
 
    package Compiler is
       for Default_Switches ("Ada") use Ada_Librdkafka_Config.Ada_Compiler_Switches;
+      for Default_Switches ("C") use ("-I" & Librdkafka_Include);
    end Compiler;
 
    package Binder is
