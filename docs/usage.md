@@ -20,7 +20,7 @@ procedure Producer_Example is
          2 => Ada_Librdkafka.KV ("acks", "all"),
          3 => Ada_Librdkafka.KV ("message.timeout.ms", "10000")));
 begin
-   Ada_Librdkafka.Reset_Delivery_Reports;
+   Ada_Librdkafka.Reset_Delivery_Reports (Producer);
 
    for I in 1 .. 10 loop
       Ada_Librdkafka.Produce
@@ -37,7 +37,7 @@ begin
    declare
       Ignored : constant Natural := Ada_Librdkafka.Poll (Producer, Timeout_Ms => 100);
       Stats   : constant Ada_Librdkafka.Delivery_Report_Stats :=
-        Ada_Librdkafka.Delivery_Reports;
+        Ada_Librdkafka.Delivery_Reports (Producer);
    begin
       pragma Unreferenced (Ignored);
       Put_Line

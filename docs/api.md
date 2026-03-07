@@ -20,6 +20,7 @@ For full producer and consumer workflow examples, see
 - `Delivery_Report_Stats`: aggregate callback counters
   - `Success_Count`
   - `Failure_Count`
+  - counters are tracked per producer client, not globally
 
 ### Functions and procedures
 
@@ -51,10 +52,10 @@ For full producer and consumer workflow examples, see
   - Serves callbacks/events for the client and returns number of events served
 - `Pending_Queue_Length (Client) return Natural`
   - Returns current output queue length
-- `Delivery_Reports return Delivery_Report_Stats`
-  - Returns aggregate delivery callback counters for this process
-- `Reset_Delivery_Reports`
-  - Clears delivery callback counters
+- `Delivery_Reports (Client) return Delivery_Report_Stats`
+  - Returns delivery callback counters for the given producer client
+- `Reset_Delivery_Reports (Client)`
+  - Clears delivery callback counters for the given producer client
 - `Version return String`
   - Runtime `librdkafka` version string
 

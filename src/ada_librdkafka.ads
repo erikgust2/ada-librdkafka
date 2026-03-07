@@ -1,6 +1,6 @@
 with Ada.Finalization;
 with Ada.Strings.Unbounded;
-with Interfaces.C;
+with System;
 
 with Librdkafka_C;
 
@@ -84,10 +84,11 @@ package Ada_Librdkafka is
 
    --  Number of queued outbound produce requests not yet completed.
    function Pending_Queue_Length (Client : Kafka_Client) return Natural;
-   --  Return global delivery report counters for this process.
-   function Delivery_Reports return Delivery_Report_Stats;
-   --  Reset global delivery report counters.
-   procedure Reset_Delivery_Reports;
+   --  Return delivery report counters for this producer client.
+   function Delivery_Reports
+     (Client : Kafka_Client) return Delivery_Report_Stats;
+   --  Reset delivery report counters for this producer client.
+   procedure Reset_Delivery_Reports (Client : Kafka_Client);
 
    --  Runtime librdkafka version string.
    function Version return String;
@@ -108,6 +109,7 @@ private
       Handle          : Librdkafka_C.Rd_Kafka_T_Access := null;
       Kind            : Client_Kind := Producer;
       Consumer_Closed : Boolean := False;
+      Delivery_Report_State : System.Address := System.Null_Address;
    end record;
 
    overriding procedure Finalize (Client : in out Kafka_Client);

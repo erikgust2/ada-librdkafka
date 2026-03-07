@@ -4,6 +4,7 @@ with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
 with Ada_Librdkafka;
+with Test_Support;
 
 procedure Real_Broker_E2E is
    use Ada.Strings.Unbounded;
@@ -23,7 +24,7 @@ procedure Real_Broker_E2E is
 
    Producer : Ada_Librdkafka.Kafka_Client :=
      Ada_Librdkafka.Create_Producer
-       ((1 => Ada_Librdkafka.KV ("bootstrap.servers", "127.0.0.1:9092"),
+       ((1 => Ada_Librdkafka.KV ("bootstrap.servers", Test_Support.Broker_Address),
          2 => Ada_Librdkafka.KV ("acks", "all"),
          3 => Ada_Librdkafka.KV ("message.timeout.ms", "10000")));
 
@@ -31,14 +32,14 @@ procedure Real_Broker_E2E is
      Ada_Librdkafka.Create_Client
        (Kind   => Ada_Librdkafka.Consumer,
         Config =>
-          (1 => Ada_Librdkafka.KV ("bootstrap.servers", "127.0.0.1:9092"),
+          (1 => Ada_Librdkafka.KV ("bootstrap.servers", Test_Support.Broker_Address),
            2 => Ada_Librdkafka.KV ("group.id", Group_Id),
            3 => Ada_Librdkafka.KV ("auto.offset.reset", "earliest"),
            4 => Ada_Librdkafka.KV ("enable.auto.commit", "false")));
 
    Seen_Count : Natural := 0;
 begin
-   Ada_Librdkafka.Reset_Delivery_Reports;
+   Ada_Librdkafka.Reset_Delivery_Reports (Producer);
 
    for I in 1 .. Message_Cnt loop
       Ada_Librdkafka.Produce

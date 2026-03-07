@@ -96,7 +96,7 @@ procedure Tests_Main is
             2 => Ada_Librdkafka.KV ("socket.timeout.ms", "100")));
       Stats    : Ada_Librdkafka.Delivery_Report_Stats;
    begin
-      Ada_Librdkafka.Reset_Delivery_Reports;
+      Ada_Librdkafka.Reset_Delivery_Reports (Producer);
       Ada_Librdkafka.Produce
         (Producer => Producer,
          Topic    => "delivery_report_test",
@@ -112,14 +112,91 @@ procedure Tests_Main is
 
          delay 0.05;
 
-         Stats := Ada_Librdkafka.Delivery_Reports;
+         Stats := Ada_Librdkafka.Delivery_Reports (Producer);
          exit when Stats.Failure_Count > 0;
       end loop;
 
-      Stats := Ada_Librdkafka.Delivery_Reports;
+      Stats := Ada_Librdkafka.Delivery_Reports (Producer);
       Assert (Stats.Failure_Count > 0,
               "delivery report callback should capture failures");
    end Test_Delivery_Reports_Capture_Failures;
+
+   procedure Test_Delivery_Reports_Are_Per_Producer is
+      Producer_A : Ada_Librdkafka.Kafka_Client :=
+        Ada_Librdkafka.Create_Producer
+          ((1 => Ada_Librdkafka.KV ("message.timeout.ms", "100"),
+            2 => Ada_Librdkafka.KV ("socket.timeout.ms", "100")));
+      Producer_B : Ada_Librdkafka.Kafka_Client :=
+        Ada_Librdkafka.Create_Producer
+          ((1 => Ada_Librdkafka.KV ("message.timeout.ms", "100"),
+            2 => Ada_Librdkafka.KV ("socket.timeout.ms", "100")));
+      Stats_A    : Ada_Librdkafka.Delivery_Report_Stats;
+      Stats_B    : Ada_Librdkafka.Delivery_Report_Stats;
+      Baseline_B : Ada_Librdkafka.Delivery_Report_Stats;
+   begin
+      Ada_Librdkafka.Reset_Delivery_Reports (Producer_A);
+      Ada_Librdkafka.Reset_Delivery_Reports (Producer_B);
+
+      Ada_Librdkafka.Produce
+        (Producer => Producer_A,
+         Topic    => "delivery_report_test_a",
+         Payload  => "payload_a");
+      Ada_Librdkafka.Produce
+        (Producer => Producer_B,
+         Topic    => "delivery_report_test_b",
+         Payload  => "payload_b");
+
+      for I in 1 .. 20 loop
+         declare
+            Ignored_Events : constant Natural :=
+              Ada_Librdkafka.Poll (Producer_A, Timeout_Ms => 50);
+         begin
+            pragma Unreferenced (Ignored_Events);
+         end;
+
+         delay 0.05;
+
+         Stats_A := Ada_Librdkafka.Delivery_Reports (Producer_A);
+         exit when Stats_A.Failure_Count > 0;
+      end loop;
+
+      Stats_A := Ada_Librdkafka.Delivery_Reports (Producer_A);
+      Stats_B := Ada_Librdkafka.Delivery_Reports (Producer_B);
+      Assert (Stats_A.Failure_Count > 0,
+              "producer A should observe its own failed delivery");
+      Assert (Stats_B.Failure_Count = 0,
+              "producer B stats should remain unchanged until it is polled");
+
+      for I in 1 .. 20 loop
+         declare
+            Ignored_Events : constant Natural :=
+              Ada_Librdkafka.Poll (Producer_B, Timeout_Ms => 50);
+         begin
+            pragma Unreferenced (Ignored_Events);
+         end;
+
+         delay 0.05;
+
+         Stats_B := Ada_Librdkafka.Delivery_Reports (Producer_B);
+         exit when Stats_B.Failure_Count > 0;
+      end loop;
+
+      Stats_B := Ada_Librdkafka.Delivery_Reports (Producer_B);
+      Assert (Stats_B.Failure_Count > 0,
+              "producer B should observe its own failed delivery");
+
+      Baseline_B := Stats_B;
+      Ada_Librdkafka.Reset_Delivery_Reports (Producer_A);
+      Stats_A := Ada_Librdkafka.Delivery_Reports (Producer_A);
+      Stats_B := Ada_Librdkafka.Delivery_Reports (Producer_B);
+
+      Assert (Stats_A.Success_Count = 0 and then Stats_A.Failure_Count = 0,
+              "reset should clear only producer A stats");
+      Assert
+        (Stats_B.Success_Count = Baseline_B.Success_Count
+         and then Stats_B.Failure_Count = Baseline_B.Failure_Count,
+              "resetting producer A should not affect producer B stats");
+   end Test_Delivery_Reports_Are_Per_Producer;
 
    procedure Test_Consumer_Subscribe_Poll_Close is
       use Ada.Strings.Unbounded;
@@ -158,6 +235,8 @@ begin
              Test_Queue_Length_Is_Nonnegative'Access);
    Run_Test ("Delivery reports track failed deliveries",
              Test_Delivery_Reports_Capture_Failures'Access);
+   Run_Test ("Delivery reports are isolated per producer",
+             Test_Delivery_Reports_Are_Per_Producer'Access);
    Run_Test ("Consumer subscribe/poll/close works",
              Test_Consumer_Subscribe_Poll_Close'Access);
 

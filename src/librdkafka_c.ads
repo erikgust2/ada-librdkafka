@@ -94,6 +94,13 @@ package Librdkafka_C is
           Convention => C,
           External_Name => "rd_kafka_conf_set_dr_msg_cb";
 
+   procedure Rd_Kafka_Conf_Set_Opaque
+     (Conf   : Rd_Kafka_Conf_T_Access;
+      Opaque : System.Address)
+     with Import,
+          Convention => C,
+          External_Name => "rd_kafka_conf_set_opaque";
+
    function Rd_Kafka_New
      (Kind        : Rd_Kafka_Type_T;
       Conf        : Rd_Kafka_Conf_T_Access;

@@ -1,9 +1,11 @@
-with Ada.Strings.Unbounded;
-with Ada.Unchecked_Conversion;
 with Ada.Exceptions;
+with Ada.Strings.Unbounded;
+with Ada.Unchecked_Deallocation;
+with Ada.Unchecked_Conversion;
 with Interfaces.C;
 with Interfaces.C.Strings;
 with System;
+with System.Address_To_Access_Conversions;
 
 with Librdkafka_C;
 
@@ -34,7 +36,7 @@ package body Ada_Librdkafka is
       return Value (To_Chars_Ptr (Data), Length);
    end Copy_Bytes;
 
-   protected Delivery_Report_Counter is
+   protected type Delivery_Report_Counter is
       procedure Add_Result (Err : Rd_Kafka_Resp_Err_T);
       function Snapshot return Delivery_Report_Stats;
       procedure Reset;
@@ -42,6 +44,41 @@ package body Ada_Librdkafka is
       Success_Count : Natural := 0;
       Failure_Count : Natural := 0;
    end Delivery_Report_Counter;
+
+   package Delivery_Report_State_Pointers is
+      new System.Address_To_Access_Conversions (Delivery_Report_Counter);
+   subtype Delivery_Report_Counter_Access is
+     Delivery_Report_State_Pointers.Object_Pointer;
+   use type Delivery_Report_Counter_Access;
+
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Delivery_Report_Counter, Delivery_Report_Counter_Access);
+
+   function To_Delivery_Report_Counter
+     (Address : System.Address) return Delivery_Report_Counter_Access is
+   begin
+      if Address = System.Null_Address then
+         return null;
+      end if;
+
+      return Delivery_Report_State_Pointers.To_Pointer (Address);
+   end To_Delivery_Report_Counter;
+
+   function Delivery_Report_Counter_For
+     (Client : Kafka_Client) return Delivery_Report_Counter_Access is
+   begin
+      return To_Delivery_Report_Counter (Client.Delivery_Report_State);
+   end Delivery_Report_Counter_For;
+
+   procedure Free_Delivery_Report_State (Client : in out Kafka_Client) is
+      Counter : Delivery_Report_Counter_Access :=
+        Delivery_Report_Counter_For (Client);
+   begin
+      if Counter /= null then
+         Free (Counter);
+         Client.Delivery_Report_State := System.Null_Address;
+      end if;
+   end Free_Delivery_Report_State;
 
    protected body Delivery_Report_Counter is
       procedure Add_Result (Err : Rd_Kafka_Resp_Err_T) is
@@ -76,13 +113,15 @@ package body Ada_Librdkafka is
      (Rk        : Rd_Kafka_T_Access;
       Rkmessage : Rd_Kafka_Message_T_Access;
       Opaque    : System.Address) is
-      pragma Unreferenced (Rk, Opaque);
+      pragma Unreferenced (Rk);
+      Counter : constant Delivery_Report_Counter_Access :=
+        To_Delivery_Report_Counter (Opaque);
    begin
-      if Rkmessage = null then
+      if Rkmessage = null or else Counter = null then
          return;
       end if;
 
-      Delivery_Report_Counter.Add_Result (Ada_Rkmsg_Err (Rkmessage));
+      Counter.Add_Result (Ada_Rkmsg_Err (Rkmessage));
    end Delivery_Report_Callback;
 
    function Error_String (Code : Rd_Kafka_Resp_Err_T) return String is
@@ -151,12 +190,13 @@ package body Ada_Librdkafka is
    function Build_Client
      (Kind   : Client_Kind;
       Config : Config_Entry_Array) return Kafka_Client is
-      Conf    : Rd_Kafka_Conf_T_Access := Rd_Kafka_Conf_New;
-      Err_Buf : chars_ptr :=
+      Conf           : Rd_Kafka_Conf_T_Access := Rd_Kafka_Conf_New;
+      Err_Buf        : chars_ptr :=
         New_String ((1 .. Error_Buffer_Size => ASCII.NUL));
-      C_Kind  : constant Rd_Kafka_Type_T :=
+      C_Kind         : constant Rd_Kafka_Type_T :=
         (if Kind = Producer then RD_KAFKA_PRODUCER else RD_KAFKA_CONSUMER);
-      Handle  : Rd_Kafka_T_Access;
+      Handle         : Rd_Kafka_T_Access;
+      Delivery_State : Delivery_Report_Counter_Access := null;
    begin
       if Conf = null then
          Free (Err_Buf);
@@ -165,6 +205,10 @@ package body Ada_Librdkafka is
       end if;
 
       if Kind = Producer then
+         Delivery_State := new Delivery_Report_Counter;
+         Rd_Kafka_Conf_Set_Opaque
+           (Conf,
+            Delivery_Report_State_Pointers.To_Address (Delivery_State));
          Rd_Kafka_Conf_Set_Dr_Msg_Cb
            (Conf, Delivery_Report_Callback'Access);
       end if;
@@ -192,6 +236,9 @@ package body Ada_Librdkafka is
          Client.Handle := Handle;
          Client.Kind := Kind;
          Client.Consumer_Closed := False;
+         Client.Delivery_Report_State :=
+           (if Delivery_State = null then System.Null_Address
+            else Delivery_Report_State_Pointers.To_Address (Delivery_State));
       end return;
    exception
       when others =>
@@ -201,6 +248,10 @@ package body Ada_Librdkafka is
 
          if Err_Buf /= Null_Ptr then
             Free (Err_Buf);
+         end if;
+
+         if Delivery_State /= null then
+            Free (Delivery_State);
          end if;
 
          raise;
@@ -531,14 +582,36 @@ package body Ada_Librdkafka is
       return Natural (Qlen);
    end Pending_Queue_Length;
 
-   function Delivery_Reports return Delivery_Report_Stats is
+   function Delivery_Reports
+     (Client : Kafka_Client) return Delivery_Report_Stats is
+      Counter : constant Delivery_Report_Counter_Access :=
+        Delivery_Report_Counter_For (Client);
    begin
-      return Delivery_Report_Counter.Snapshot;
+      Check_Client_Kind
+        (Client,
+         Expected  => Ada_Librdkafka.Producer,
+         Operation => "Delivery_Reports");
+
+      if Counter = null then
+         return (Success_Count => 0,
+                 Failure_Count => 0);
+      end if;
+
+      return Counter.Snapshot;
    end Delivery_Reports;
 
-   procedure Reset_Delivery_Reports is
+   procedure Reset_Delivery_Reports (Client : Kafka_Client) is
+      Counter : constant Delivery_Report_Counter_Access :=
+        Delivery_Report_Counter_For (Client);
    begin
-      Delivery_Report_Counter.Reset;
+      Check_Client_Kind
+        (Client,
+         Expected  => Ada_Librdkafka.Producer,
+         Operation => "Reset_Delivery_Reports");
+
+      if Counter /= null then
+         Counter.Reset;
+      end if;
    end Reset_Delivery_Reports;
 
    function Version return String is
@@ -566,5 +639,7 @@ package body Ada_Librdkafka is
          Rd_Kafka_Destroy (Client.Handle);
          Client.Handle := null;
       end if;
+
+      Free_Delivery_Report_State (Client);
    end Finalize;
 end Ada_Librdkafka;
