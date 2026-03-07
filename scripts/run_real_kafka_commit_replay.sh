@@ -30,9 +30,10 @@ fi
 
 init_build_env
 
-echo "[4/5] building ada library and smoke binary..."
+echo "[4/5] building ada library and commit replay binary..."
 alr -s "${ROOT_DIR}/.config/alire" -n build
 alr -s "${ROOT_DIR}/.config/alire" -n exec -- \
-  gprbuild -P tests/real_broker_smoke.gpr
-echo "[5/5] running smoke executable..."
-alr -s "${ROOT_DIR}/.config/alire" -n exec -- ./bin/real_broker_smoke
+  gprbuild -P tests/real_broker_commit_replay.gpr
+
+echo "[5/5] running commit replay executable..."
+alr -s "${ROOT_DIR}/.config/alire" -n exec -- ./bin/real_broker_commit_replay

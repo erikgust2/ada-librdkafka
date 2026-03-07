@@ -27,11 +27,14 @@
 - `tests/`: standalone Ada test runner and test project
 - `tests/real_broker_smoke.adb`: real Kafka smoke test executable
 - `tests/real_broker_e2e.adb`: Docker-backed produce+consume e2e executable
+- `tests/real_broker_commit_replay.adb`: real Kafka commit/replay regression executable
 - `scripts/build_librdkafka.sh`: builds/install vendored `librdkafka` into `vendor/librdkafka-install`
 - `scripts/run_real_kafka_smoke.sh`: starts local Kafka and runs real-broker smoke test
 - `scripts/run_real_kafka_e2e.sh`: starts local Kafka and runs produce+consume e2e test
+- `scripts/run_real_kafka_commit_replay.sh`: starts local Kafka and runs commit/replay regression
 - `integration/docker-compose.yml`: local single-node Kafka (KRaft) for smoke tests
 - `vendor/librdkafka`: git submodule pinned to `librdkafka` `v2.13.2`
+- `.github/workflows/ci.yml`: explicit GitHub Actions workflow for build + test stages
 
 ## Build prerequisites
 
@@ -101,6 +104,25 @@ Requires Docker. This runs producer and consumer against the same local broker:
 ```bash
 ./scripts/run_real_kafka_e2e.sh
 ```
+
+## Real broker commit replay regression
+
+Requires Docker. This verifies consumed key/payload content and confirms that a
+sync commit prevents replay when the same consumer group reconnects:
+
+```bash
+./scripts/run_real_kafka_commit_replay.sh
+```
+
+## GitHub Actions CI
+
+CI orchestration lives in GitHub Actions rather than in one shell wrapper:
+
+- `.github/workflows/ci.yml`
+
+The workflow builds vendored `librdkafka`, compiles all Ada targets, runs the
+standalone test suite, starts Kafka with Docker Compose, and then runs the
+broker-backed executables as separate CI steps.
 
 ## Example
 

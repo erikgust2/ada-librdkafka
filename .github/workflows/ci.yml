@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      XDG_CONFIG_HOME: ${{ github.workspace }}/.config
+      XDG_RUNTIME_DIR: /tmp
+      TMPDIR: /tmp
+      LIBRDKAFKA_PREFIX: ${{ github.workspace }}/vendor/librdkafka-install
+      LD_LIBRARY_PATH: ${{ github.workspace }}/lib:${{ github.workspace }}/vendor/librdkafka-install/lib
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set Up Alire
+        uses: alire-project/setup-alire@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev cmake
+
+      - name: Initialize Kafka Test Environment
+        run: |
+          source ./scripts/kafka_test_common.sh
+          init_kafka_test_env
+          {
+            echo "KAFKA_EXTERNAL_PORT=${KAFKA_EXTERNAL_PORT}"
+            echo "ADA_LIBRDKAFKA_BOOTSTRAP_SERVERS=${ADA_LIBRDKAFKA_BOOTSTRAP_SERVERS}"
+            echo "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Prepare Alire Directories
+        run: mkdir -p "${XDG_CONFIG_HOME}/alire"
+
+      - name: Build Vendored Librdkafka
+        run: ./scripts/build_librdkafka.sh
+
+      - name: Build Ada Library
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n build
+
+      - name: Build Standalone Unit Tests
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- gprbuild -P tests/ada_librdkafka_tests.gpr
+
+      - name: Build Real Broker Smoke Test
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- gprbuild -P tests/real_broker_smoke.gpr
+
+      - name: Build Real Broker E2E Test
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- gprbuild -P tests/real_broker_e2e.gpr
+
+      - name: Build Real Broker Commit Replay Test
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- gprbuild -P tests/real_broker_commit_replay.gpr
+
+      - name: Run Standalone Unit Tests
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- ./bin/tests_main
+
+      - name: Start Kafka
+        run: docker compose -f integration/docker-compose.yml up -d
+
+      - name: Wait For Kafka Health
+        run: |
+          container_id="$(docker compose -f integration/docker-compose.yml ps -q kafka)"
+          if [[ -z "${container_id}" ]]; then
+            echo "kafka container was not created" >&2
+            exit 1
+          fi
+
+          for _ in $(seq 1 120); do
+            status="$(
+              docker inspect \
+                --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+                "${container_id}" 2>/dev/null || echo unknown
+            )"
+
+            if [[ "${status}" == "healthy" ]]; then
+              exit 0
+            fi
+
+            if [[ "${status}" == "unhealthy" || "${status}" == "exited" ]]; then
+              echo "kafka container failed health check: ${status}" >&2
+              docker logs --tail 200 "${container_id}" >&2 || true
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          echo "timed out waiting for kafka to become healthy" >&2
+          docker logs --tail 200 "${container_id}" >&2 || true
+          exit 1
+
+      - name: Run Real Broker Smoke Test
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- ./bin/real_broker_smoke
+
+      - name: Run Real Broker E2E Test
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- ./bin/real_broker_e2e
+
+      - name: Run Real Broker Commit Replay Test
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- ./bin/real_broker_commit_replay
+
+      - name: Dump Kafka Logs On Failure
+        if: failure()
+        run: |
+          container_id="$(docker compose -f integration/docker-compose.yml ps -q kafka)"
+          if [[ -n "${container_id}" ]]; then
+            docker logs --tail 200 "${container_id}" >&2 || true
+          fi
+
+      - name: Stop Kafka
+        if: always()
+        run: docker compose -f integration/docker-compose.yml down -v

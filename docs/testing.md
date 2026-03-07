@@ -12,6 +12,7 @@ require an external Kafka broker.
 - queue-length invariants for newly created producers
 - delivery-report callback counters for failed deliveries
 - consumer subscribe/poll/unsubscribe/close behavior
+- per-producer delivery report isolation
 
 ## Run commands
 
@@ -51,8 +52,44 @@ Run it with:
 ./scripts/run_real_kafka_e2e.sh
 ```
 
+## Real Kafka commit replay regression
+
+The repository includes a stronger broker-backed test that verifies:
+
+- produced keys and payloads are consumed intact
+- synchronous commit advances the group offset
+- reopening the same consumer group does not replay committed messages
+
+Files:
+
+- `tests/real_broker_commit_replay.adb`
+- `tests/real_broker_commit_replay.gpr`
+- `scripts/run_real_kafka_commit_replay.sh`
+
+Run it with:
+
+```bash
+./scripts/run_real_kafka_commit_replay.sh
+```
+
+## GitHub Actions CI
+
+CI orchestration is defined in:
+
+- `.github/workflows/ci.yml`
+
+The workflow contains explicit steps for:
+
+- builds vendored `librdkafka`
+- builds the Ada library and all test executables
+- runs `tests_main`
+- starts one Docker-backed Kafka broker
+- runs smoke, e2e, and commit-replay tests sequentially
+- tears Kafka down in an `always()` cleanup step
+
 ## Notes
 
 - `librdkafka` must be built first (`./scripts/build_librdkafka.sh`)
 - `libcurl` development headers are required for `librdkafka v2.13.2` default build
 - If using another install prefix, export `LIBRDKAFKA_PREFIX` before building/running tests
+- Real-broker executables read `ADA_LIBRDKAFKA_BOOTSTRAP_SERVERS` and default to `127.0.0.1:9092`
