@@ -124,6 +124,18 @@ The workflow builds vendored `librdkafka`, compiles all Ada targets, runs the
 standalone test suite, starts Kafka with Docker Compose, and then runs the
 broker-backed executables as separate CI steps.
 
+## License
+
+The `ada_librdkafka` wrapper code in this repository is licensed under MIT.
+
+This repository also vendors `librdkafka` as a submodule under
+`vendor/librdkafka`. That dependency remains under its own BSD 2-Clause
+license. A copy of the upstream `librdkafka` license is included at
+`THIRD_PARTY_LICENSES/librdkafka.BSD2`.
+
+If you check out the submodule, upstream `librdkafka` also includes additional
+third-party notices in `vendor/librdkafka/LICENSES.txt`.
+
 ## Example
 
 ```ada
