@@ -29,9 +29,11 @@
 - `tests/real_broker_e2e.adb`: Docker-backed produce+consume e2e executable
 - `tests/real_broker_commit_replay.adb`: real Kafka commit/replay regression executable
 - `scripts/build_librdkafka.sh`: builds/install vendored `librdkafka` into `vendor/librdkafka-install`
+- `scripts/run_unit_tests.sh`: builds and runs the standalone Ada unit suite
 - `scripts/run_real_kafka_smoke.sh`: starts local Kafka and runs real-broker smoke test
 - `scripts/run_real_kafka_e2e.sh`: starts local Kafka and runs produce+consume e2e test
 - `scripts/run_real_kafka_commit_replay.sh`: starts local Kafka and runs commit/replay regression
+- `scripts/run_ci_suite.sh`: local full-suite runner matching the CI flow
 - `integration/docker-compose.yml`: local single-node Kafka (KRaft) for smoke tests
 - `vendor/librdkafka`: git submodule pinned to `librdkafka` `v2.13.2`
 - `.github/workflows/ci.yml`: explicit GitHub Actions workflow for build + test stages
@@ -79,6 +81,14 @@ the submodule working tree remains clean.
 
 ## Run tests
 
+Standalone Ada suite:
+
+```bash
+./scripts/run_unit_tests.sh
+```
+
+Equivalent manual commands:
+
 ```bash
 XDG_RUNTIME_DIR=/tmp TMPDIR=/tmp \
 alr -n exec -- gprbuild -P tests/ada_librdkafka_tests.gpr
@@ -86,6 +96,14 @@ alr -n exec -- gprbuild -P tests/ada_librdkafka_tests.gpr
 LD_LIBRARY_PATH=$PWD/lib:$PWD/vendor/librdkafka-install/lib \
 XDG_RUNTIME_DIR=/tmp TMPDIR=/tmp \
 alr -n exec -- ./bin/tests_main
+```
+
+## Run the full local suite
+
+Requires Docker. This mirrors the CI flow locally:
+
+```bash
+./scripts/run_ci_suite.sh
 ```
 
 ## Real broker smoke test

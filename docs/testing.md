@@ -16,6 +16,14 @@ require an external Kafka broker.
 
 ## Run commands
 
+Preferred local runner:
+
+```bash
+./scripts/run_unit_tests.sh
+```
+
+Equivalent manual commands:
+
 ```bash
 XDG_RUNTIME_DIR=/tmp TMPDIR=/tmp \
 alr -n exec -- gprbuild -P tests/ada_librdkafka_tests.gpr
@@ -23,6 +31,15 @@ alr -n exec -- gprbuild -P tests/ada_librdkafka_tests.gpr
 LD_LIBRARY_PATH=$PWD/lib:$PWD/vendor/librdkafka-install/lib \
 XDG_RUNTIME_DIR=/tmp TMPDIR=/tmp \
 alr -n exec -- ./bin/tests_main
+```
+
+## Full local suite
+
+To run the standalone suite plus all broker-backed executables with one
+command:
+
+```bash
+./scripts/run_ci_suite.sh
 ```
 
 ## Real Kafka smoke test
@@ -93,3 +110,24 @@ The workflow contains explicit steps for:
 - `libcurl` development headers are required for `librdkafka v2.13.2` default build
 - If using another install prefix, export `LIBRDKAFKA_PREFIX` before building/running tests
 - Real-broker executables read `ADA_LIBRDKAFKA_BOOTSTRAP_SERVERS` and default to `127.0.0.1:9092`
+
+## High-Value Coverage Gaps
+
+- Mock-cluster coverage is missing entirely: there are no tests for
+  `Ada_Librdkafka.Mock.Create`, `Bootstraps`, or `Create_Topic`, and no
+  brokerless success-path tests built on top of the mock APIs.
+- Binary fidelity is not covered on successful round trips: no tests currently
+  verify empty payloads, empty keys, embedded NUL bytes, or larger payloads on
+  the produce-and-consume path.
+- Post-close and closed-handle behavior is still thin: `Close_Consumer`
+  idempotency is covered, but operations attempted after close/finalization are
+  not characterized and may still hide lifecycle bugs.
+- Consumer event semantics are only lightly checked: the suite does not assert
+  expected `Error_Code` and non-allocating error-buffer semantics for broker
+  errors, partition EOF, or no-message polls.
+- Broker-backed consumer coverage is still narrow: the e2e test counts received
+  messages, but it does not verify explicit unsubscribe/resubscribe behavior or
+  `Commit (Async => True)`.
+- Multi-client and group behavior is mostly untested: there are no cases for
+  two consumers in the same group, independent groups reading the same topic,
+  or repeated producer/consumer creation in loops to flush out lifecycle leaks.
