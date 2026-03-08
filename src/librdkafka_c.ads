@@ -155,6 +155,21 @@ package Librdkafka_C is
           Convention => C,
           External_Name => "rd_kafka_produce";
 
+   function Ada_Rd_Kafka_Produce_Bytes
+     (Rk         : Rd_Kafka_T_Access;
+      Topic      : System.Address;
+      Topic_Len  : C_Size_T;
+      Partition  : Interfaces.Integer_32;
+      Msgflags   : C_Int;
+      Payload    : System.Address;
+      Len        : C_Size_T;
+      Key        : System.Address;
+      Keylen     : C_Size_T;
+      Msg_Opaque : System.Address) return C_Int
+     with Import,
+          Convention => C,
+          External_Name => "ada_rd_kafka_produce_bytes";
+
    function Rd_Kafka_Flush
      (Rk         : Rd_Kafka_T_Access;
       Timeout_Ms : C_Int) return Rd_Kafka_Resp_Err_T

@@ -1,4 +1,5 @@
 with Ada.Finalization;
+with Ada.Streams;
 with Ada.Strings.Unbounded;
 with System;
 
@@ -28,6 +29,9 @@ package Ada_Librdkafka is
       Success_Count : Natural := 0;
       Failure_Count : Natural := 0;
    end record;
+   Empty_Bytes : constant Ada.Streams.Stream_Element_Array (1 .. 0) :=
+     (others => 0);
+
    type Consumer_Message is record
       Has_Message : Boolean := False;
       Topic       : Ada.Strings.Unbounded.Unbounded_String;
@@ -37,6 +41,20 @@ package Ada_Librdkafka is
       Offset      : Long_Long_Integer := -1;
       Error_Code  : Integer := 0;
       Error_Text  : Ada.Strings.Unbounded.Unbounded_String;
+   end record;
+   type Message_Metadata is record
+      Has_Message        : Boolean := False;
+      Partition          : Integer := 0;
+      Offset             : Long_Long_Integer := -1;
+      Error_Code         : Integer := 0;
+      Error_Length       : Natural := 0;
+      Topic_Length       : Natural := 0;
+      Payload_Length     : Natural := 0;
+      Key_Length         : Natural := 0;
+      Error_Truncated    : Boolean := False;
+      Topic_Truncated    : Boolean := False;
+      Payload_Truncated  : Boolean := False;
+      Key_Truncated      : Boolean := False;
    end record;
 
    --  Create a Kafka client of the requested kind with optional configuration.
@@ -55,6 +73,14 @@ package Ada_Librdkafka is
    procedure Produce
      (Producer  : Kafka_Client;
       Topic     : String;
+      Payload   : Ada.Streams.Stream_Element_Array;
+      Key       : Ada.Streams.Stream_Element_Array := Empty_Bytes;
+      Partition : Integer :=
+        Integer (Librdkafka_C.RD_KAFKA_PARTITION_UA));
+   --  Convenience overload for UTF-8 or text payloads.
+   procedure Produce
+     (Producer  : Kafka_Client;
+      Topic     : String;
       Payload   : String;
       Key       : String := "";
       Partition : Integer :=
@@ -67,6 +93,19 @@ package Ada_Librdkafka is
    --  Remove all current subscriptions for the consumer.
    procedure Unsubscribe (Consumer : Kafka_Client);
    --  Poll for one consumer message or event.
+   procedure Poll_Message_Into
+     (Consumer       : Kafka_Client;
+      Error_Buffer   : in out Ada.Streams.Stream_Element_Array;
+      Error_Used     : out Natural;
+      Topic_Buffer   : in out Ada.Streams.Stream_Element_Array;
+      Topic_Used     : out Natural;
+      Payload_Buffer : in out Ada.Streams.Stream_Element_Array;
+      Payload_Used   : out Natural;
+      Key_Buffer     : in out Ada.Streams.Stream_Element_Array;
+      Key_Used       : out Natural;
+      Metadata       : out Message_Metadata;
+      Timeout_Ms     : Natural := 1_000);
+   --  Convenience polling API that allocates and decodes payload/key as text.
    function Poll_Message
      (Consumer   : Kafka_Client;
       Timeout_Ms : Natural := 1_000) return Consumer_Message;
@@ -92,6 +131,12 @@ package Ada_Librdkafka is
 
    --  Runtime librdkafka version string.
    function Version return String;
+
+   --  Text helper conversions. These preserve the underlying byte values.
+   function To_Bytes
+     (Text : String) return Ada.Streams.Stream_Element_Array;
+   function To_String
+     (Bytes : Ada.Streams.Stream_Element_Array) return String;
 
 private
    use Ada.Strings.Unbounded;

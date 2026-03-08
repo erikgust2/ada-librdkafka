@@ -1,4 +1,5 @@
 with Ada.Exceptions;
+with Ada.Streams;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 with Ada.Unchecked_Conversion;
@@ -10,6 +11,7 @@ with System.Address_To_Access_Conversions;
 with Librdkafka_C;
 
 package body Ada_Librdkafka is
+   use Ada.Streams;
    use Ada.Strings.Unbounded;
    use Interfaces.C;
    use Interfaces.C.Strings;
@@ -18,23 +20,217 @@ package body Ada_Librdkafka is
 
    Error_Buffer_Size : constant := 512;
 
-   function To_Chars_Ptr is new Ada.Unchecked_Conversion
-     (System.Address, chars_ptr);
+   function C_Memcpy
+     (Destination : System.Address;
+      Source      : System.Address;
+      Count       : C_Size_T) return System.Address
+     with Import,
+          Convention => C,
+          External_Name => "memcpy";
+
+   function Error_String (Code : Rd_Kafka_Resp_Err_T) return String;
+
+   procedure Check_Client_Kind
+     (Client    : Kafka_Client;
+      Expected  : Client_Kind;
+      Operation : String);
+
+   function To_Address is new Ada.Unchecked_Conversion
+     (chars_ptr, System.Address);
+
+   function To_Length
+     (Length  : C_Size_T;
+      Context : String) return Natural is
+   begin
+      if Length > C_Size_T (Integer'Last) then
+         raise Kafka_Error with Context;
+      end if;
+
+      return Natural (Length);
+   end To_Length;
+
+   function String_Data_Address (Text : String) return System.Address is
+   begin
+      if Text'Length = 0 then
+         return System.Null_Address;
+      end if;
+
+      return Text (Text'First)'Address;
+   end String_Data_Address;
+
+   function Bytes_Data_Address
+     (Data : Stream_Element_Array) return System.Address is
+   begin
+      if Data'Length = 0 then
+         return System.Null_Address;
+      end if;
+
+      return Data (Data'First)'Address;
+   end Bytes_Data_Address;
 
    function Copy_Bytes
      (Data   : System.Address;
       Length : C_Size_T) return String is
+      Result_Length : constant Natural :=
+        To_Length (Length, "message payload exceeds Ada String limits");
    begin
       if Data = System.Null_Address or else Length = 0 then
          return "";
       end if;
 
-      if Length > C_Size_T (Integer'Last) then
-         raise Kafka_Error with "message payload exceeds Ada String limits";
+      declare
+         Result : String (1 .. Result_Length);
+         Ignored : constant System.Address :=
+           C_Memcpy
+             (Destination => Result (Result'First)'Address,
+              Source      => Data,
+              Count       => Length);
+      begin
+         pragma Unreferenced (Ignored);
+         return Result;
+      end;
+   end Copy_Bytes;
+
+   procedure Copy_Bytes_Into_Buffer
+     (Source      : System.Address;
+      Length      : C_Size_T;
+      Buffer      : in out Stream_Element_Array;
+      Used        : out Natural;
+      Truncated   : out Boolean;
+      Description : String) is
+      Required : constant Natural := To_Length (Length, Description);
+      Capacity : constant Natural := Natural (Buffer'Length);
+      Count    : constant Natural := Natural'Min (Required, Capacity);
+   begin
+      Used := Count;
+      Truncated := Required > Capacity;
+
+      if Count = 0 or else Source = System.Null_Address then
+         return;
       end if;
 
-      return Value (To_Chars_Ptr (Data), Length);
-   end Copy_Bytes;
+      declare
+         Ignored : constant System.Address :=
+           C_Memcpy
+             (Destination => Buffer (Buffer'First)'Address,
+              Source      => Source,
+              Count       => C_Size_T (Count));
+      begin
+         pragma Unreferenced (Ignored);
+      end;
+   end Copy_Bytes_Into_Buffer;
+
+   procedure Populate_Metadata
+     (Msg_Ptr   : Rd_Kafka_Message_T_Access;
+      Metadata  : out Message_Metadata;
+      Stage     : in out Unbounded_String) is
+      Err : Rd_Kafka_Resp_Err_T;
+   begin
+      Metadata :=
+        (Has_Message       => False,
+         Partition         => 0,
+         Offset            => -1,
+         Error_Code        => 0,
+         Error_Length      => 0,
+         Topic_Length      => 0,
+         Payload_Length    => 0,
+         Key_Length        => 0,
+         Error_Truncated   => False,
+         Topic_Truncated   => False,
+         Payload_Truncated => False,
+         Key_Truncated     => False);
+
+      Stage := Ada.Strings.Unbounded.To_Unbounded_String ("message_err");
+      Err := Ada_Rkmsg_Err (Msg_Ptr);
+
+      Stage := Ada.Strings.Unbounded.To_Unbounded_String ("partition");
+      Metadata.Partition := Integer (Ada_Rkmsg_Partition (Msg_Ptr));
+
+      Stage := Ada.Strings.Unbounded.To_Unbounded_String ("offset");
+      Metadata.Offset := Long_Long_Integer (Ada_Rkmsg_Offset (Msg_Ptr));
+
+      Stage := Ada.Strings.Unbounded.To_Unbounded_String ("error_code");
+      Metadata.Error_Code := Integer (Err);
+
+      Stage := Ada.Strings.Unbounded.To_Unbounded_String ("topic_length");
+      declare
+         Topic_Ptr : constant chars_ptr := Ada_Rkmsg_Topic (Msg_Ptr);
+      begin
+         if Topic_Ptr /= Null_Ptr then
+            Metadata.Topic_Length :=
+              To_Length
+                (Strlen (Topic_Ptr),
+                 "message topic exceeds Ada buffer limits");
+         end if;
+      end;
+
+      if Err = RD_KAFKA_RESP_ERR_NO_ERROR then
+         Stage := Ada.Strings.Unbounded.To_Unbounded_String ("payload_length");
+         Metadata.Has_Message := True;
+         Metadata.Payload_Length :=
+           To_Length
+             (Ada_Rkmsg_Len (Msg_Ptr),
+              "message payload exceeds Ada buffer limits");
+
+         Stage := Ada.Strings.Unbounded.To_Unbounded_String ("key_length");
+         Metadata.Key_Length :=
+           To_Length
+             (Ada_Rkmsg_Key_Len (Msg_Ptr),
+              "message key exceeds Ada buffer limits");
+      else
+         Stage := Ada.Strings.Unbounded.To_Unbounded_String ("error_length");
+         declare
+            Error_Ptr : constant chars_ptr := Rd_Kafka_Err2Str (Err);
+         begin
+            if Error_Ptr /= Null_Ptr then
+               Metadata.Error_Length :=
+                 To_Length
+                   (Strlen (Error_Ptr),
+                    "message error text exceeds Ada buffer limits");
+            end if;
+         end;
+      end if;
+   end Populate_Metadata;
+
+   procedure Produce_Raw
+     (Producer        : Kafka_Client;
+      Topic           : String;
+      Payload_Address : System.Address;
+      Payload_Length  : C_Size_T;
+      Key_Address     : System.Address;
+      Key_Length      : C_Size_T;
+      Partition       : Integer) is
+      Produce_Res : C_Int;
+   begin
+      Check_Client_Kind
+        (Producer,
+         Expected  => Ada_Librdkafka.Producer,
+         Operation => "Produce");
+
+      if Topic'Length = 0 then
+         raise Kafka_Error with "Produce requires a non-empty topic";
+      end if;
+
+      Produce_Res := Ada_Rd_Kafka_Produce_Bytes
+        (Rk         => Producer.Handle,
+         Topic      => String_Data_Address (Topic),
+         Topic_Len  => C_Size_T (Topic'Length),
+         Partition  => Interfaces.Integer_32 (Partition),
+         Msgflags   => RD_KAFKA_MSG_F_COPY,
+         Payload    => Payload_Address,
+         Len        => Payload_Length,
+         Key        => Key_Address,
+         Keylen     => Key_Length,
+         Msg_Opaque => System.Null_Address);
+
+      if Produce_Res /= 0 then
+         declare
+            Err_Code : constant Rd_Kafka_Resp_Err_T := Rd_Kafka_Last_Error;
+         begin
+            raise Kafka_Error with Error_String (Err_Code);
+         end;
+      end if;
+   end Produce_Raw;
 
    protected type Delivery_Report_Counter is
       procedure Add_Result (Err : Rd_Kafka_Resp_Err_T);
@@ -260,14 +456,56 @@ package body Ada_Librdkafka is
    function KV (Name : String; Value : String) return Config_Entry is
    begin
       return
-        (Name  => To_Unbounded_String (Name),
-         Value => To_Unbounded_String (Value));
+        (Name  => Ada.Strings.Unbounded.To_Unbounded_String (Name),
+         Value => Ada.Strings.Unbounded.To_Unbounded_String (Value));
    end KV;
 
    function Topic (Name : String) return Topic_Entry is
    begin
-      return (Name => To_Unbounded_String (Name));
+      return
+        (Name => Ada.Strings.Unbounded.To_Unbounded_String (Name));
    end Topic;
+
+   function To_Bytes
+     (Text : String) return Ada.Streams.Stream_Element_Array is
+   begin
+      if Text'Length = 0 then
+         return Empty_Bytes;
+      end if;
+
+      declare
+         Result : Stream_Element_Array
+           (1 .. Stream_Element_Offset (Text'Length));
+         Cursor : Stream_Element_Offset := Result'First;
+      begin
+         for Ch of Text loop
+            Result (Cursor) := Stream_Element (Character'Pos (Ch));
+            Cursor := Cursor + 1;
+         end loop;
+
+         return Result;
+      end;
+   end To_Bytes;
+
+   function To_String
+     (Bytes : Ada.Streams.Stream_Element_Array) return String is
+   begin
+      if Bytes'Length = 0 then
+         return "";
+      end if;
+
+      declare
+         Result : String (1 .. Integer (Bytes'Length));
+         Cursor : Positive := Result'First;
+      begin
+         for Item of Bytes loop
+            Result (Cursor) := Character'Val (Item);
+            Cursor := Cursor + 1;
+         end loop;
+
+         return Result;
+      end;
+   end To_String;
 
    function Create_Client
      (Kind   : Client_Kind;
@@ -304,65 +542,35 @@ package body Ada_Librdkafka is
    procedure Produce
      (Producer  : Kafka_Client;
       Topic     : String;
+      Payload   : Ada.Streams.Stream_Element_Array;
+      Key       : Ada.Streams.Stream_Element_Array := Empty_Bytes;
+      Partition : Integer := Integer (RD_KAFKA_PARTITION_UA)) is
+   begin
+      Produce_Raw
+        (Producer        => Producer,
+         Topic           => Topic,
+         Payload_Address => Bytes_Data_Address (Payload),
+         Payload_Length  => C_Size_T (Payload'Length),
+         Key_Address     => Bytes_Data_Address (Key),
+         Key_Length      => C_Size_T (Key'Length),
+         Partition       => Partition);
+   end Produce;
+
+   procedure Produce
+     (Producer  : Kafka_Client;
+      Topic     : String;
       Payload   : String;
       Key       : String := "";
       Partition : Integer := Integer (RD_KAFKA_PARTITION_UA)) is
-      Topic_Name   : chars_ptr := New_String (Topic);
-      Topic_Handle : Rd_Kafka_Topic_T_Access;
-      Payload_Ptr  : chars_ptr := New_String (Payload);
-      Key_Ptr      : chars_ptr := Null_Ptr;
-      Produce_Res  : C_Int;
    begin
-      Check_Client_Kind
-        (Producer,
-         Expected  => Ada_Librdkafka.Producer,
-         Operation => "Produce");
-
-      if Key'Length > 0 then
-         Key_Ptr := New_String (Key);
-      end if;
-
-      Topic_Handle :=
-        Rd_Kafka_Topic_New
-          (Producer.Handle, Topic_Name, System.Null_Address);
-
-      if Topic_Handle = null then
-         Free (Topic_Name);
-         Free (Payload_Ptr);
-
-         if Key_Ptr /= Null_Ptr then
-            Free (Key_Ptr);
-         end if;
-
-         raise Kafka_Error with
-           "failed to create topic handle for " & Topic;
-      end if;
-
-      Produce_Res := Rd_Kafka_Produce
-        (Rkt        => Topic_Handle,
-         Partition  => C_Int (Partition),
-         Msgflags   => RD_KAFKA_MSG_F_COPY,
-         Payload    => Payload_Ptr,
-         Len        => size_t (Payload'Length),
-         Key        => Key_Ptr,
-         Keylen     => size_t (Key'Length),
-         Msg_Opaque => System.Null_Address);
-
-      Rd_Kafka_Topic_Destroy (Topic_Handle);
-      Free (Topic_Name);
-      Free (Payload_Ptr);
-
-      if Key_Ptr /= Null_Ptr then
-         Free (Key_Ptr);
-      end if;
-
-      if Produce_Res /= 0 then
-         declare
-            Err_Code : constant Rd_Kafka_Resp_Err_T := Rd_Kafka_Last_Error;
-         begin
-            raise Kafka_Error with Error_String (Err_Code);
-         end;
-      end if;
+      Produce_Raw
+        (Producer        => Producer,
+         Topic           => Topic,
+         Payload_Address => String_Data_Address (Payload),
+         Payload_Length  => C_Size_T (Payload'Length),
+         Key_Address     => String_Data_Address (Key),
+         Key_Length      => C_Size_T (Key'Length),
+         Partition       => Partition);
    end Produce;
 
    procedure Subscribe
@@ -425,13 +633,129 @@ package body Ada_Librdkafka is
       end if;
    end Unsubscribe;
 
+   procedure Poll_Message_Into
+     (Consumer       : Kafka_Client;
+      Error_Buffer   : in out Ada.Streams.Stream_Element_Array;
+      Error_Used     : out Natural;
+      Topic_Buffer   : in out Ada.Streams.Stream_Element_Array;
+      Topic_Used     : out Natural;
+      Payload_Buffer : in out Ada.Streams.Stream_Element_Array;
+      Payload_Used   : out Natural;
+      Key_Buffer     : in out Ada.Streams.Stream_Element_Array;
+      Key_Used       : out Natural;
+      Metadata       : out Message_Metadata;
+      Timeout_Ms     : Natural := 1_000) is
+      Msg_Ptr : Rd_Kafka_Message_T_Access;
+      Stage   : Unbounded_String :=
+        Ada.Strings.Unbounded.To_Unbounded_String ("consumer_poll");
+   begin
+      Error_Used := 0;
+      Topic_Used := 0;
+      Payload_Used := 0;
+      Key_Used := 0;
+      Metadata :=
+        (Has_Message       => False,
+         Partition         => 0,
+         Offset            => -1,
+         Error_Code        => 0,
+         Error_Length      => 0,
+         Topic_Length      => 0,
+         Payload_Length    => 0,
+         Key_Length        => 0,
+         Error_Truncated   => False,
+         Topic_Truncated   => False,
+         Payload_Truncated => False,
+         Key_Truncated     => False);
+
+      Check_Client_Kind
+        (Consumer,
+         Expected  => Ada_Librdkafka.Consumer,
+         Operation => "Poll_Message_Into");
+
+      Msg_Ptr :=
+        Rd_Kafka_Consumer_Poll
+          (Consumer.Handle, C_Int (Timeout_Ms));
+
+      if Msg_Ptr = null then
+         return;
+      end if;
+
+      Populate_Metadata (Msg_Ptr, Metadata, Stage);
+
+      if Metadata.Error_Code /= Integer (RD_KAFKA_RESP_ERR_NO_ERROR) then
+         Stage := Ada.Strings.Unbounded.To_Unbounded_String ("error_copy");
+         declare
+            Error_Ptr : constant chars_ptr :=
+              Rd_Kafka_Err2Str (Rd_Kafka_Resp_Err_T (Metadata.Error_Code));
+         begin
+            if Error_Ptr /= Null_Ptr then
+               Copy_Bytes_Into_Buffer
+                 (Source      => To_Address (Error_Ptr),
+                  Length      => C_Size_T (Metadata.Error_Length),
+                  Buffer      => Error_Buffer,
+                  Used        => Error_Used,
+                  Truncated   => Metadata.Error_Truncated,
+                  Description =>
+                    "message error text exceeds Ada buffer limits");
+            end if;
+         end;
+      end if;
+
+      Stage := Ada.Strings.Unbounded.To_Unbounded_String ("topic_copy");
+      declare
+         Topic_Ptr : constant chars_ptr := Ada_Rkmsg_Topic (Msg_Ptr);
+      begin
+         if Topic_Ptr /= Null_Ptr then
+            Copy_Bytes_Into_Buffer
+              (Source      => To_Address (Topic_Ptr),
+               Length      => C_Size_T (Metadata.Topic_Length),
+               Buffer      => Topic_Buffer,
+               Used        => Topic_Used,
+               Truncated   => Metadata.Topic_Truncated,
+               Description => "message topic exceeds Ada buffer limits");
+         end if;
+      end;
+
+      if Metadata.Has_Message then
+         Stage := Ada.Strings.Unbounded.To_Unbounded_String ("payload_copy");
+         Copy_Bytes_Into_Buffer
+           (Source      => Ada_Rkmsg_Payload (Msg_Ptr),
+            Length      => Ada_Rkmsg_Len (Msg_Ptr),
+            Buffer      => Payload_Buffer,
+            Used        => Payload_Used,
+            Truncated   => Metadata.Payload_Truncated,
+            Description => "message payload exceeds Ada buffer limits");
+
+         Stage := Ada.Strings.Unbounded.To_Unbounded_String ("key_copy");
+         Copy_Bytes_Into_Buffer
+           (Source      => Ada_Rkmsg_Key (Msg_Ptr),
+            Length      => Ada_Rkmsg_Key_Len (Msg_Ptr),
+            Buffer      => Key_Buffer,
+            Used        => Key_Used,
+            Truncated   => Metadata.Key_Truncated,
+            Description => "message key exceeds Ada buffer limits");
+      end if;
+
+      Rd_Kafka_Message_Destroy (Msg_Ptr);
+   exception
+      when E : others =>
+         if Msg_Ptr /= null then
+            Rd_Kafka_Message_Destroy (Msg_Ptr);
+         end if;
+         raise Kafka_Error with
+           "poll decode failed at " &
+           Ada.Strings.Unbounded.To_String (Stage) & ": " &
+           Ada.Exceptions.Exception_Message (E);
+   end Poll_Message_Into;
+
    function Poll_Message
      (Consumer   : Kafka_Client;
       Timeout_Ms : Natural := 1_000) return Consumer_Message is
       Msg_Ptr : Rd_Kafka_Message_T_Access;
       Result  : Consumer_Message;
-      Err     : Rd_Kafka_Resp_Err_T;
-      Stage   : Unbounded_String := To_Unbounded_String ("consumer_poll");
+      Meta    : Message_Metadata;
+      Stage   : Unbounded_String :=
+        Ada.Strings.Unbounded.To_Unbounded_String ("consumer_poll");
    begin
       Check_Client_Kind
         (Consumer,
@@ -446,44 +770,43 @@ package body Ada_Librdkafka is
          return Result;
       end if;
 
-      Stage := To_Unbounded_String ("message_err");
-      Err := Ada_Rkmsg_Err (Msg_Ptr);
+      Populate_Metadata (Msg_Ptr, Meta, Stage);
+      Result.Has_Message := Meta.Has_Message;
+      Result.Partition := Meta.Partition;
+      Result.Offset := Meta.Offset;
+      Result.Error_Code := Meta.Error_Code;
 
-      Stage := To_Unbounded_String ("partition");
-      Result.Partition := Integer (Ada_Rkmsg_Partition (Msg_Ptr));
-
-      Stage := To_Unbounded_String ("offset");
-      Result.Offset := Long_Long_Integer (Ada_Rkmsg_Offset (Msg_Ptr));
-
-      Stage := To_Unbounded_String ("error_code");
-      Result.Error_Code := Integer (Err);
-
-      Stage := To_Unbounded_String ("topic");
+      Stage := Ada.Strings.Unbounded.To_Unbounded_String ("topic");
       declare
          Topic_Ptr : constant chars_ptr := Ada_Rkmsg_Topic (Msg_Ptr);
       begin
          if Topic_Ptr /= Null_Ptr then
-            Result.Topic := To_Unbounded_String (Value (Topic_Ptr));
+            Result.Topic :=
+              Ada.Strings.Unbounded.To_Unbounded_String (Value (Topic_Ptr));
          end if;
       end;
 
-      if Err = RD_KAFKA_RESP_ERR_NO_ERROR then
-         Stage := To_Unbounded_String ("payload_copy");
-         Result.Has_Message := True;
-         declare
-            Payload : constant System.Address := Ada_Rkmsg_Payload (Msg_Ptr);
-            Payload_Len : constant C_Size_T := Ada_Rkmsg_Len (Msg_Ptr);
-            Key : constant System.Address := Ada_Rkmsg_Key (Msg_Ptr);
-            Key_Len : constant C_Size_T := Ada_Rkmsg_Key_Len (Msg_Ptr);
-         begin
-            Result.Payload :=
-              To_Unbounded_String (Copy_Bytes (Payload, Payload_Len));
-            Result.Key :=
-              To_Unbounded_String (Copy_Bytes (Key, Key_Len));
-         end;
-      else
-         Stage := To_Unbounded_String ("error_text");
-         Result.Error_Text := To_Unbounded_String (Error_String (Err));
+      if Meta.Error_Code /= Integer (RD_KAFKA_RESP_ERR_NO_ERROR) then
+         Stage := Ada.Strings.Unbounded.To_Unbounded_String ("error_text");
+         Result.Error_Text :=
+           Ada.Strings.Unbounded.To_Unbounded_String
+             (Error_String (Rd_Kafka_Resp_Err_T (Meta.Error_Code)));
+      end if;
+
+      if Meta.Has_Message then
+         Stage := Ada.Strings.Unbounded.To_Unbounded_String ("payload_copy");
+         Result.Payload :=
+           Ada.Strings.Unbounded.To_Unbounded_String
+             (Copy_Bytes
+                (Ada_Rkmsg_Payload (Msg_Ptr),
+                 Ada_Rkmsg_Len (Msg_Ptr)));
+
+         Stage := Ada.Strings.Unbounded.To_Unbounded_String ("key_copy");
+         Result.Key :=
+           Ada.Strings.Unbounded.To_Unbounded_String
+             (Copy_Bytes
+                (Ada_Rkmsg_Key (Msg_Ptr),
+                 Ada_Rkmsg_Key_Len (Msg_Ptr)));
       end if;
 
       Rd_Kafka_Message_Destroy (Msg_Ptr);
@@ -494,7 +817,8 @@ package body Ada_Librdkafka is
             Rd_Kafka_Message_Destroy (Msg_Ptr);
          end if;
          raise Kafka_Error with
-           "poll decode failed at " & To_String (Stage) & ": " &
+           "poll decode failed at " &
+           Ada.Strings.Unbounded.To_String (Stage) & ": " &
            Ada.Exceptions.Exception_Message (E);
    end Poll_Message;
 
