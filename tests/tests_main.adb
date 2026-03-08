@@ -1,4 +1,5 @@
 with Ada.Exceptions;
+with Ada.Streams;
 with Ada.Text_IO;
 with Ada.Strings.Unbounded;
 
@@ -16,6 +17,19 @@ procedure Tests_Main is
       end if;
    end Assert;
 
+   procedure Expect_Kafka_Error
+     (Proc    : not null access procedure;
+      Message : String := "expected Kafka_Error") is
+   begin
+      begin
+         Proc.all;
+         raise Program_Error with Message;
+      exception
+         when Ada_Librdkafka.Kafka_Error =>
+            null;
+      end;
+   end Expect_Kafka_Error;
+
    procedure Run_Test (Name : String; Proc : not null access procedure) is
    begin
       Proc.all;
@@ -32,6 +46,17 @@ procedure Tests_Main is
       Assert (Ada_Librdkafka.Version'Length > 0,
               "Version should not be empty");
    end Test_Version_Is_Not_Empty;
+
+   procedure Test_Text_Byte_Helpers_Roundtrip is
+      Text : constant String := "A" & Character'Val (0) & "B";
+      Bytes : constant Ada.Streams.Stream_Element_Array :=
+        Ada_Librdkafka.To_Bytes (Text);
+   begin
+      Assert (Natural (Bytes'Length) = Text'Length,
+              "To_Bytes should preserve length");
+      Assert (Ada_Librdkafka.To_String (Bytes) = Text,
+              "To_String should preserve byte values");
+   end Test_Text_Byte_Helpers_Roundtrip;
 
    procedure Test_Invalid_Config_Is_Rejected is
    begin
@@ -51,14 +76,14 @@ procedure Tests_Main is
 
    procedure Test_Add_Brokers_Rejects_Empty_Input is
       Producer : Ada_Librdkafka.Kafka_Client := Ada_Librdkafka.Create_Producer;
-   begin
+      procedure Attempt is
       begin
          Ada_Librdkafka.Add_Brokers (Producer, "");
-         raise Program_Error with "expected Kafka_Error";
-      exception
-         when Ada_Librdkafka.Kafka_Error =>
-            null;
-      end;
+      end Attempt;
+   begin
+      Expect_Kafka_Error
+        (Attempt'Access,
+         Message => "expected Kafka_Error when broker list is empty");
    end Test_Add_Brokers_Rejects_Empty_Input;
 
    procedure Test_Produce_Rejects_Consumer_Handle is
@@ -68,19 +93,99 @@ procedure Tests_Main is
            Config =>
              (1 => Ada_Librdkafka.KV ("group.id", "test-group"),
               2 => Ada_Librdkafka.KV ("bootstrap.servers", "127.0.0.1:1")));
-   begin
+      procedure Attempt is
       begin
          Ada_Librdkafka.Produce
            (Producer => Consumer,
             Topic    => "any_topic",
             Payload  => "payload");
-
-         raise Program_Error with "expected Kafka_Error";
-      exception
-         when Ada_Librdkafka.Kafka_Error =>
-            null;
-      end;
+      end Attempt;
+   begin
+      Expect_Kafka_Error
+        (Attempt'Access,
+         Message => "expected Kafka_Error for Produce on a consumer");
    end Test_Produce_Rejects_Consumer_Handle;
+
+   procedure Test_Produce_Bytes_Rejects_Consumer_Handle is
+      Consumer : Ada_Librdkafka.Kafka_Client :=
+        Ada_Librdkafka.Create_Client
+          (Kind   => Ada_Librdkafka.Consumer,
+           Config =>
+             (1 => Ada_Librdkafka.KV ("group.id", "test-bytes-group"),
+              2 => Ada_Librdkafka.KV ("bootstrap.servers", "127.0.0.1:1")));
+      procedure Attempt is
+      begin
+         Ada_Librdkafka.Produce
+           (Producer => Consumer,
+            Topic    => "any_topic",
+            Payload  => Ada_Librdkafka.To_Bytes ("payload"),
+            Key      => Ada_Librdkafka.To_Bytes ("key"));
+      end Attempt;
+   begin
+      Expect_Kafka_Error
+        (Attempt'Access,
+         Message => "expected Kafka_Error for byte Produce on a consumer");
+   end Test_Produce_Bytes_Rejects_Consumer_Handle;
+
+   procedure Test_Subscribe_Rejects_Producer_Handle is
+      Producer : Ada_Librdkafka.Kafka_Client := Ada_Librdkafka.Create_Producer;
+      procedure Attempt is
+      begin
+         Ada_Librdkafka.Subscribe
+           (Producer,
+            (1 => Ada_Librdkafka.Topic ("unit_topic")));
+      end Attempt;
+   begin
+      Expect_Kafka_Error
+        (Attempt'Access,
+         Message => "expected Kafka_Error for Subscribe on a producer");
+   end Test_Subscribe_Rejects_Producer_Handle;
+
+   procedure Test_Subscribe_Rejects_Empty_Topic_List is
+      Consumer : Ada_Librdkafka.Kafka_Client :=
+        Ada_Librdkafka.Create_Client
+          (Kind   => Ada_Librdkafka.Consumer,
+           Config =>
+             (1 => Ada_Librdkafka.KV ("group.id", "empty-topics-group"),
+              2 => Ada_Librdkafka.KV ("bootstrap.servers", "127.0.0.1:1")));
+      procedure Attempt is
+      begin
+         Ada_Librdkafka.Subscribe (Consumer, (1 .. 0 => <>));
+      end Attempt;
+   begin
+      Expect_Kafka_Error
+        (Attempt'Access,
+         Message => "expected Kafka_Error for empty Subscribe topic list");
+   end Test_Subscribe_Rejects_Empty_Topic_List;
+
+   procedure Test_Commit_Rejects_Producer_Handle is
+      Producer : Ada_Librdkafka.Kafka_Client := Ada_Librdkafka.Create_Producer;
+      procedure Attempt is
+      begin
+         Ada_Librdkafka.Commit (Producer, Async => False);
+      end Attempt;
+   begin
+      Expect_Kafka_Error
+        (Attempt'Access,
+         Message => "expected Kafka_Error for Commit on a producer");
+   end Test_Commit_Rejects_Producer_Handle;
+
+   procedure Test_Flush_Rejects_Consumer_Handle is
+      Consumer : Ada_Librdkafka.Kafka_Client :=
+        Ada_Librdkafka.Create_Client
+          (Kind   => Ada_Librdkafka.Consumer,
+           Config =>
+             (1 => Ada_Librdkafka.KV ("group.id", "flush-group"),
+              2 => Ada_Librdkafka.KV ("bootstrap.servers", "127.0.0.1:1")));
+      procedure Attempt is
+      begin
+         Ada_Librdkafka.Flush (Consumer, Timeout_Ms => 10);
+      end Attempt;
+   begin
+      Expect_Kafka_Error
+        (Attempt'Access,
+         Message => "expected Kafka_Error for Flush on a consumer");
+   end Test_Flush_Rejects_Consumer_Handle;
 
    procedure Test_Queue_Length_Is_Nonnegative is
       Producer : Ada_Librdkafka.Kafka_Client := Ada_Librdkafka.Create_Producer;
@@ -199,7 +304,6 @@ procedure Tests_Main is
    end Test_Delivery_Reports_Are_Per_Producer;
 
    procedure Test_Consumer_Subscribe_Poll_Close is
-      use Ada.Strings.Unbounded;
       Consumer : Ada_Librdkafka.Kafka_Client :=
         Ada_Librdkafka.Create_Client
           (Kind   => Ada_Librdkafka.Consumer,
@@ -215,22 +319,106 @@ procedure Tests_Main is
       Msg := Ada_Librdkafka.Poll_Message (Consumer, Timeout_Ms => 10);
 
       if Msg.Has_Message then
-         Assert (Length (Msg.Payload) >= 0,
+         Assert (Ada.Strings.Unbounded.Length (Msg.Payload) >= 0,
                  "payload should be accessible when a message is returned");
       end if;
 
       Ada_Librdkafka.Unsubscribe (Consumer);
       Ada_Librdkafka.Close_Consumer (Consumer);
    end Test_Consumer_Subscribe_Poll_Close;
+
+   procedure Test_Poll_Message_Into_Handles_Empty_Poll is
+      Consumer : Ada_Librdkafka.Kafka_Client :=
+        Ada_Librdkafka.Create_Client
+          (Kind   => Ada_Librdkafka.Consumer,
+           Config =>
+             (1 => Ada_Librdkafka.KV ("group.id", "into-group"),
+              2 => Ada_Librdkafka.KV ("bootstrap.servers", "127.0.0.1:1"),
+              3 => Ada_Librdkafka.KV ("auto.offset.reset", "earliest")));
+      Error_Buffer : Ada.Streams.Stream_Element_Array (1 .. 64) :=
+        (others => 0);
+      Topic_Buffer : Ada.Streams.Stream_Element_Array (1 .. 32) :=
+        (others => 0);
+      Payload_Buffer : Ada.Streams.Stream_Element_Array (1 .. 8) :=
+        (others => 0);
+      Key_Buffer : Ada.Streams.Stream_Element_Array (1 .. 8) :=
+        (others => 0);
+      Error_Used   : Natural;
+      Topic_Used   : Natural;
+      Payload_Used : Natural;
+      Key_Used     : Natural;
+      Metadata     : Ada_Librdkafka.Message_Metadata;
+   begin
+      Ada_Librdkafka.Subscribe
+        (Consumer,
+         (1 => Ada_Librdkafka.Topic ("unit_topic")));
+
+      Ada_Librdkafka.Poll_Message_Into
+        (Consumer       => Consumer,
+         Error_Buffer   => Error_Buffer,
+         Error_Used     => Error_Used,
+         Topic_Buffer   => Topic_Buffer,
+         Topic_Used     => Topic_Used,
+         Payload_Buffer => Payload_Buffer,
+         Payload_Used   => Payload_Used,
+         Key_Buffer     => Key_Buffer,
+         Key_Used       => Key_Used,
+         Metadata       => Metadata,
+         Timeout_Ms     => 10);
+
+      Assert (Error_Used <= Metadata.Error_Length,
+              "error copy count should not exceed required length");
+      Assert (Topic_Used <= Metadata.Topic_Length,
+              "topic copy count should not exceed required length");
+      Assert (Payload_Used <= Metadata.Payload_Length,
+              "payload copy count should not exceed required length");
+      Assert (Key_Used <= Metadata.Key_Length,
+              "key copy count should not exceed required length");
+      Assert (Error_Used <= Natural (Error_Buffer'Length),
+              "error copy count should fit in the caller buffer");
+      Assert (Topic_Used <= Natural (Topic_Buffer'Length),
+              "topic copy count should fit in the caller buffer");
+      Assert (Payload_Used <= Natural (Payload_Buffer'Length),
+              "payload copy count should fit in the caller buffer");
+      Assert (Key_Used <= Natural (Key_Buffer'Length),
+              "key copy count should fit in the caller buffer");
+
+      Ada_Librdkafka.Unsubscribe (Consumer);
+      Ada_Librdkafka.Close_Consumer (Consumer);
+   end Test_Poll_Message_Into_Handles_Empty_Poll;
+
+   procedure Test_Close_Consumer_Is_Idempotent is
+      Consumer : Ada_Librdkafka.Kafka_Client :=
+        Ada_Librdkafka.Create_Client
+          (Kind   => Ada_Librdkafka.Consumer,
+           Config =>
+             (1 => Ada_Librdkafka.KV ("group.id", "close-group"),
+              2 => Ada_Librdkafka.KV ("bootstrap.servers", "127.0.0.1:1")));
+   begin
+      Ada_Librdkafka.Close_Consumer (Consumer);
+      Ada_Librdkafka.Close_Consumer (Consumer);
+   end Test_Close_Consumer_Is_Idempotent;
 begin
    Run_Test ("Version reports librdkafka",
              Test_Version_Is_Not_Empty'Access);
+   Run_Test ("Text/byte helpers roundtrip cleanly",
+             Test_Text_Byte_Helpers_Roundtrip'Access);
    Run_Test ("Invalid config raises a config exception",
              Test_Invalid_Config_Is_Rejected'Access);
    Run_Test ("Add_Brokers validates input",
              Test_Add_Brokers_Rejects_Empty_Input'Access);
    Run_Test ("Produce enforces producer handles",
              Test_Produce_Rejects_Consumer_Handle'Access);
+   Run_Test ("Byte Produce enforces producer handles",
+             Test_Produce_Bytes_Rejects_Consumer_Handle'Access);
+   Run_Test ("Subscribe enforces consumer handles",
+             Test_Subscribe_Rejects_Producer_Handle'Access);
+   Run_Test ("Subscribe requires at least one topic",
+             Test_Subscribe_Rejects_Empty_Topic_List'Access);
+   Run_Test ("Commit enforces consumer handles",
+             Test_Commit_Rejects_Producer_Handle'Access);
+   Run_Test ("Flush enforces producer handles",
+             Test_Flush_Rejects_Consumer_Handle'Access);
    Run_Test ("Queue length helper is stable",
              Test_Queue_Length_Is_Nonnegative'Access);
    Run_Test ("Delivery reports track failed deliveries",
@@ -239,6 +427,10 @@ begin
              Test_Delivery_Reports_Are_Per_Producer'Access);
    Run_Test ("Consumer subscribe/poll/close works",
              Test_Consumer_Subscribe_Poll_Close'Access);
+   Run_Test ("Poll_Message_Into handles empty polls",
+             Test_Poll_Message_Into_Handles_Empty_Poll'Access);
+   Run_Test ("Close_Consumer is idempotent",
+             Test_Close_Consumer_Is_Idempotent'Access);
 
    if Test_Failures > 0 then
       raise Program_Error with Natural'Image (Test_Failures) & " tests failed";
