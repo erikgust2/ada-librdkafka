@@ -11,12 +11,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      XDG_CONFIG_HOME: ${{ github.workspace }}/.config
-      XDG_RUNTIME_DIR: /tmp
-      TMPDIR: /tmp
-      LIBRDKAFKA_PREFIX: ${{ github.workspace }}/vendor/librdkafka-install
-      LD_LIBRARY_PATH: ${{ github.workspace }}/lib:${{ github.workspace }}/vendor/librdkafka-install/lib
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Check Out Repository
         uses: actions/checkout@v4
@@ -39,10 +36,20 @@ jobs:
             echo "KAFKA_EXTERNAL_PORT=${KAFKA_EXTERNAL_PORT}"
             echo "ADA_LIBRDKAFKA_BOOTSTRAP_SERVERS=${ADA_LIBRDKAFKA_BOOTSTRAP_SERVERS}"
             echo "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}"
+            echo "KAFKA_PORT_LOCK_DIR=${KAFKA_PORT_LOCK_DIR:-}"
           } >> "${GITHUB_ENV}"
 
-      - name: Prepare Alire Directories
-        run: mkdir -p "${XDG_CONFIG_HOME}/alire"
+      - name: Initialize Build Environment
+        run: |
+          source ./scripts/kafka_test_common.sh
+          init_build_env
+          {
+            echo "XDG_CONFIG_HOME=${XDG_CONFIG_HOME}"
+            echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"
+            echo "TMPDIR=${TMPDIR}"
+            echo "LIBRDKAFKA_PREFIX=${LIBRDKAFKA_PREFIX}"
+            echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
+          } >> "${GITHUB_ENV}"
 
       - name: Build Vendored Librdkafka
         run: ./scripts/build_librdkafka.sh
@@ -66,39 +73,16 @@ jobs:
         run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- ./bin/tests_main
 
       - name: Start Kafka
-        run: docker compose -f integration/docker-compose.yml up -d
+        run: |
+          source ./scripts/kafka_test_common.sh
+          require_compose
+          compose_cmd up -d
 
       - name: Wait For Kafka Health
         run: |
-          container_id="$(docker compose -f integration/docker-compose.yml ps -q kafka)"
-          if [[ -z "${container_id}" ]]; then
-            echo "kafka container was not created" >&2
-            exit 1
-          fi
-
-          for _ in $(seq 1 120); do
-            status="$(
-              docker inspect \
-                --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
-                "${container_id}" 2>/dev/null || echo unknown
-            )"
-
-            if [[ "${status}" == "healthy" ]]; then
-              exit 0
-            fi
-
-            if [[ "${status}" == "unhealthy" || "${status}" == "exited" ]]; then
-              echo "kafka container failed health check: ${status}" >&2
-              docker logs --tail 200 "${container_id}" >&2 || true
-              exit 1
-            fi
-
-            sleep 2
-          done
-
-          echo "timed out waiting for kafka to become healthy" >&2
-          docker logs --tail 200 "${container_id}" >&2 || true
-          exit 1
+          source ./scripts/kafka_test_common.sh
+          require_compose
+          wait_for_kafka_health
 
       - name: Run Real Broker Smoke Test
         run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- ./bin/real_broker_smoke
@@ -112,11 +96,13 @@ jobs:
       - name: Dump Kafka Logs On Failure
         if: failure()
         run: |
-          container_id="$(docker compose -f integration/docker-compose.yml ps -q kafka)"
-          if [[ -n "${container_id}" ]]; then
-            docker logs --tail 200 "${container_id}" >&2 || true
-          fi
+          source ./scripts/kafka_test_common.sh
+          require_compose
+          show_kafka_logs
 
       - name: Stop Kafka
         if: always()
-        run: docker compose -f integration/docker-compose.yml down -v
+        run: |
+          source ./scripts/kafka_test_common.sh
+          require_compose
+          cleanup_kafka
