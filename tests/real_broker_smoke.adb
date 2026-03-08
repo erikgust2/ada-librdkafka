@@ -20,8 +20,8 @@ begin
    Ada_Librdkafka.Produce
      (Producer => Producer,
       Topic    => "ada_librdkafka_smoke",
-      Payload  => "smoke_test_payload",
-      Key      => "smoke");
+      Payload  => Ada_Librdkafka.To_Bytes ("smoke_test_payload"),
+      Key      => Ada_Librdkafka.To_Bytes ("smoke"));
 
    Ada_Librdkafka.Flush (Producer, Timeout_Ms => 10_000);
    declare
