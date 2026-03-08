@@ -5,7 +5,9 @@ producer and consumer workflows.
 
 ## Producer pattern
 
-Use one producer handle for repeated sends, then flush before exit.
+Use one producer handle for repeated sends, then flush before exit. The
+byte-oriented `Produce` overload is the primary API; the string overload stays
+available for convenience.
 
 ```ada
 with Ada.Text_IO;
@@ -26,8 +28,9 @@ begin
       Ada_Librdkafka.Produce
         (Producer => Producer,
          Topic    => "events",
-         Payload  => "payload_" & Integer'Image (I),
-         Key      => "k");
+         Payload  => Ada_Librdkafka.To_Bytes
+           ("payload_" & Integer'Image (I)),
+         Key      => Ada_Librdkafka.To_Bytes ("k"));
    end loop;
 
    --  Flush blocks until delivery completes or timeout is reached.
@@ -50,14 +53,17 @@ end Producer_Example;
 ## Consumer pattern
 
 Subscribe once, poll in a loop, process only `Has_Message = True`, then commit
-and close.
+and close. For hot paths, prefer `Poll_Message_Into` so error/topic/payload/key
+buffers can be reused across polls.
 
 ```ada
+with Ada.Streams;
 with Ada.Text_IO;
 with Ada.Strings.Unbounded;
 with Ada_Librdkafka;
 
 procedure Consumer_Example is
+   use Ada.Streams;
    use Ada.Text_IO;
    use Ada.Strings.Unbounded;
 
@@ -74,23 +80,46 @@ begin
      (Consumer,
       (1 => Ada_Librdkafka.Topic ("events")));
 
-   for Attempt in 1 .. 100 loop
-      declare
-         Msg : constant Ada_Librdkafka.Consumer_Message :=
-           Ada_Librdkafka.Poll_Message (Consumer, Timeout_Ms => 250);
-      begin
-         pragma Unreferenced (Attempt);
-         if Msg.Has_Message then
-            Put_Line
-              ("topic=" & To_String (Msg.Topic) &
-               " offset=" & Long_Long_Integer'Image (Msg.Offset) &
-               " payload=" & To_String (Msg.Payload));
-         elsif Msg.Error_Code /= 0 then
-            --  Non-message events or consumer errors.
-            Put_Line ("poll event/error: " & To_String (Msg.Error_Text));
-         end if;
-      end;
-   end loop;
+   declare
+      Error_Buffer   : Stream_Element_Array (1 .. 256) := (others => 0);
+      Topic_Buffer   : Stream_Element_Array (1 .. 256) := (others => 0);
+      Payload_Buffer : Stream_Element_Array (1 .. 1_024) := (others => 0);
+      Key_Buffer     : Stream_Element_Array (1 .. 256) := (others => 0);
+   begin
+      for Attempt in 1 .. 100 loop
+         declare
+            Error_Used   : Natural := 0;
+            Topic_Used   : Natural := 0;
+            Payload_Used : Natural := 0;
+            Key_Used     : Natural := 0;
+            Metadata     : Ada_Librdkafka.Message_Metadata;
+         begin
+            pragma Unreferenced (Attempt);
+            Ada_Librdkafka.Poll_Message_Into
+              (Consumer       => Consumer,
+               Error_Buffer   => Error_Buffer,
+               Error_Used     => Error_Used,
+               Topic_Buffer   => Topic_Buffer,
+               Topic_Used     => Topic_Used,
+               Payload_Buffer => Payload_Buffer,
+               Payload_Used   => Payload_Used,
+               Key_Buffer     => Key_Buffer,
+               Key_Used       => Key_Used,
+               Metadata       => Metadata,
+               Timeout_Ms     => 250);
+
+            if Metadata.Has_Message then
+               Put_Line
+                 ("topic_bytes=" & Natural'Image (Topic_Used) &
+                  " offset=" & Long_Long_Integer'Image (Metadata.Offset) &
+                  " payload_bytes=" & Natural'Image (Payload_Used));
+            elsif Metadata.Error_Code /= 0 then
+               --  Non-message events or consumer errors.
+               Put_Line ("poll error bytes=" & Natural'Image (Error_Used));
+            end if;
+         end;
+      end loop;
+   end;
 
    --  Commit current assignment offsets and close cleanly.
    Ada_Librdkafka.Commit (Consumer, Async => False);
@@ -106,8 +135,9 @@ Typical production flow for one process handling both roles:
 2. Subscribe consumer before entering poll loop.
 3. Produce with `Produce`, then `Flush` on controlled shutdown.
 4. Poll consumer frequently and process only `Has_Message` entries.
-5. Commit offsets (`Commit`) at your chosen checkpoint granularity.
-6. Call `Close_Consumer` before process exit.
+5. Reuse caller-owned buffers with `Poll_Message_Into` on the hot path.
+6. Commit offsets (`Commit`) at your chosen checkpoint granularity.
+7. Call `Close_Consumer` before process exit.
 
 ## Safety notes and footguns
 
@@ -115,7 +145,10 @@ Typical production flow for one process handling both roles:
   - `Produce` is async. Exiting without `Flush` can drop queued messages.
 - Polling is required:
   - Call `Poll` on producer to serve delivery callbacks.
-  - Call `Poll_Message` on consumer frequently to avoid max-poll issues.
+  - Call `Poll_Message_Into` or `Poll_Message` frequently on consumers.
+- Buffer growth is explicit:
+  - `Poll_Message_Into` reports full error/topic/payload/key lengths in `Metadata`.
+  - Grow the caller buffers yourself when any `*_Truncated` flag is set.
 - Consumer close is explicit:
   - Call `Close_Consumer` for clean group leave/offset finalization.
 - Commit strategy is your durability boundary:

@@ -21,6 +21,11 @@ For full producer and consumer workflow examples, see
   - `Success_Count`
   - `Failure_Count`
   - counters are tracked per producer client, not globally
+- `Message_Metadata`: non-allocating consumer poll result metadata
+  - `Has_Message`, `Partition`, `Offset`
+  - `Error_Code`, `Error_Length`
+  - `Topic_Length`, `Payload_Length`, `Key_Length`
+  - `Error_Truncated`, `Topic_Truncated`, `Payload_Truncated`, `Key_Truncated`
 
 ### Functions and procedures
 
@@ -32,16 +37,23 @@ For full producer and consumer workflow examples, see
   - Convenience wrapper for producer creation
 - `Add_Brokers (Client, Brokers)`
   - Adds broker list (`host:port,host:port`) at runtime
-- `Produce (Producer, Topic, Payload, Key := "", Partition := -1)`
+- `Produce (Producer, Topic, Payload : Stream_Element_Array, Key := Empty_Bytes, Partition := -1)`
+  - Primary producer API
   - Enqueues a message with copy semantics (`RD_KAFKA_MSG_F_COPY`)
+- `Produce (Producer, Topic, Payload : String, Key := "", Partition := -1)`
+  - Convenience text wrapper over the byte-oriented producer path
 - `Topic (Name) return Topic_Entry`
   - Helper constructor for topic lists
 - `Subscribe (Consumer, Topics)`
   - Subscribes a consumer to a topic set
 - `Unsubscribe (Consumer)`
   - Removes the current subscription set
+- `Poll_Message_Into (Consumer, Error_Buffer, Error_Used, Topic_Buffer, Topic_Used, Payload_Buffer, Payload_Used, Key_Buffer, Key_Used, Metadata, Timeout_Ms := 1000)`
+  - Primary consumer API for hot paths
+  - Copies error/topic/payload/key bytes into caller-owned reusable buffers
+  - Returns required lengths and truncation flags in `Metadata`
 - `Poll_Message (Consumer, Timeout_Ms := 1000) return Consumer_Message`
-  - Polls the consumer and decodes message/event data
+  - Convenience polling API that allocates and decodes payload/key as text
 - `Commit (Consumer, Async := False)`
   - Commits current assignment offsets
 - `Close_Consumer (Consumer)`
@@ -58,6 +70,10 @@ For full producer and consumer workflow examples, see
   - Clears delivery callback counters for the given producer client
 - `Version return String`
   - Runtime `librdkafka` version string
+- `To_Bytes (Text) return Stream_Element_Array`
+  - Converts text to raw bytes without interpretation
+- `To_String (Bytes) return String`
+  - Rebuilds a text value from raw bytes
 
 ## `Ada_Librdkafka.Mock`
 
