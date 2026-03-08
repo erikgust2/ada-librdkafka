@@ -7,6 +7,8 @@ with Test_Support;
 procedure Real_Broker_Smoke is
    use Ada.Text_IO;
 
+   Topic_Name : constant String := Test_Support.Unique_Name ("ada_librdkafka_smoke");
+
    Producer : Ada_Librdkafka.Kafka_Client :=
      Ada_Librdkafka.Create_Producer
        ((1 => Ada_Librdkafka.KV ("bootstrap.servers", Test_Support.Broker_Address),
@@ -19,7 +21,7 @@ begin
 
    Ada_Librdkafka.Produce
      (Producer => Producer,
-      Topic    => "ada_librdkafka_smoke",
+      Topic    => Topic_Name,
       Payload  => Ada_Librdkafka.To_Bytes ("smoke_test_payload"),
       Key      => Ada_Librdkafka.To_Bytes ("smoke"));
 

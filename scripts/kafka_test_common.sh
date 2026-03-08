@@ -140,3 +140,24 @@ cleanup_kafka() {
 
   compose_cmd down -v >/dev/null 2>&1 || true
 }
+
+create_kafka_topic() {
+  local topic="$1"
+  local partitions="${2:-1}"
+  local container_id
+
+  container_id="$(kafka_container_id)"
+  if [[ -z "${container_id}" ]]; then
+    echo "kafka container is not running" >&2
+    exit 1
+  fi
+
+  docker exec "${container_id}" \
+    kafka-topics \
+      --bootstrap-server localhost:29092 \
+      --create \
+      --if-not-exists \
+      --topic "${topic}" \
+      --partitions "${partitions}" \
+      --replication-factor 1 >/dev/null
+}

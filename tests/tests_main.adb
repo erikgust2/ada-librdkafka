@@ -170,6 +170,30 @@ procedure Tests_Main is
          Message => "expected Kafka_Error for Commit on a producer");
    end Test_Commit_Rejects_Producer_Handle;
 
+   procedure Test_Unsubscribe_Rejects_Producer_Handle is
+      Producer : Ada_Librdkafka.Kafka_Client := Ada_Librdkafka.Create_Producer;
+      procedure Attempt is
+      begin
+         Ada_Librdkafka.Unsubscribe (Producer);
+      end Attempt;
+   begin
+      Expect_Kafka_Error
+        (Attempt'Access,
+         Message => "expected Kafka_Error for Unsubscribe on a producer");
+   end Test_Unsubscribe_Rejects_Producer_Handle;
+
+   procedure Test_Close_Consumer_Rejects_Producer_Handle is
+      Producer : Ada_Librdkafka.Kafka_Client := Ada_Librdkafka.Create_Producer;
+      procedure Attempt is
+      begin
+         Ada_Librdkafka.Close_Consumer (Producer);
+      end Attempt;
+   begin
+      Expect_Kafka_Error
+        (Attempt'Access,
+         Message => "expected Kafka_Error for Close_Consumer on a producer");
+   end Test_Close_Consumer_Rejects_Producer_Handle;
+
    procedure Test_Flush_Rejects_Consumer_Handle is
       Consumer : Ada_Librdkafka.Kafka_Client :=
         Ada_Librdkafka.Create_Client
@@ -193,6 +217,24 @@ procedure Tests_Main is
       Assert (Ada_Librdkafka.Pending_Queue_Length (Producer) = 0,
               "new producer should have an empty out queue");
    end Test_Queue_Length_Is_Nonnegative;
+
+   procedure Test_Delivery_Reports_Default_To_Zero is
+      Producer : Ada_Librdkafka.Kafka_Client := Ada_Librdkafka.Create_Producer;
+      Stats    : constant Ada_Librdkafka.Delivery_Report_Stats :=
+        Ada_Librdkafka.Delivery_Reports (Producer);
+   begin
+      Assert (Stats.Success_Count = 0,
+              "new producer should start with zero successful deliveries");
+      Assert (Stats.Failure_Count = 0,
+              "new producer should start with zero failed deliveries");
+   end Test_Delivery_Reports_Default_To_Zero;
+
+   procedure Test_Poll_On_New_Producer_Is_Stable is
+      Producer : Ada_Librdkafka.Kafka_Client := Ada_Librdkafka.Create_Producer;
+      Events   : constant Natural := Ada_Librdkafka.Poll (Producer, Timeout_Ms => 0);
+   begin
+      Assert (Events = 0, "new producer should not report any polled events");
+   end Test_Poll_On_New_Producer_Is_Stable;
 
    procedure Test_Delivery_Reports_Capture_Failures is
       Producer : Ada_Librdkafka.Kafka_Client :=
@@ -417,10 +459,18 @@ begin
              Test_Subscribe_Rejects_Empty_Topic_List'Access);
    Run_Test ("Commit enforces consumer handles",
              Test_Commit_Rejects_Producer_Handle'Access);
+   Run_Test ("Unsubscribe enforces consumer handles",
+             Test_Unsubscribe_Rejects_Producer_Handle'Access);
+   Run_Test ("Close_Consumer enforces consumer handles",
+             Test_Close_Consumer_Rejects_Producer_Handle'Access);
    Run_Test ("Flush enforces producer handles",
              Test_Flush_Rejects_Consumer_Handle'Access);
    Run_Test ("Queue length helper is stable",
              Test_Queue_Length_Is_Nonnegative'Access);
+   Run_Test ("Delivery reports start at zero",
+             Test_Delivery_Reports_Default_To_Zero'Access);
+   Run_Test ("Poll on a new producer is stable",
+             Test_Poll_On_New_Producer_Is_Stable'Access);
    Run_Test ("Delivery reports track failed deliveries",
              Test_Delivery_Reports_Capture_Failures'Access);
    Run_Test ("Delivery reports are isolated per producer",
