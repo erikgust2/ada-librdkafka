@@ -60,6 +60,9 @@ jobs:
       - name: Build Standalone Unit Tests
         run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- gprbuild -P tests/ada_librdkafka_tests.gpr
 
+      - name: Build Mock Cluster Tests
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- gprbuild -P tests/mock_cluster_tests.gpr
+
       - name: Build Real Broker Smoke Test
         run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- gprbuild -P tests/real_broker_smoke.gpr
 
@@ -69,8 +72,17 @@ jobs:
       - name: Build Real Broker Commit Replay Test
         run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- gprbuild -P tests/real_broker_commit_replay.gpr
 
+      - name: Build Real Broker Group Isolation Test
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- gprbuild -P tests/real_broker_group_isolation.gpr
+
+      - name: Build Real Broker Group Sharing Test
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- gprbuild -P tests/real_broker_group_sharing.gpr
+
       - name: Run Standalone Unit Tests
         run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- ./bin/tests_main
+
+      - name: Run Mock Cluster Tests
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- ./bin/mock_cluster_tests
 
       - name: Start Kafka
         run: |
@@ -92,6 +104,33 @@ jobs:
 
       - name: Run Real Broker Commit Replay Test
         run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- ./bin/real_broker_commit_replay
+
+      - name: Run Real Broker Group Isolation Test
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- ./bin/real_broker_group_isolation
+
+      - name: Prepare Real Broker Group Sharing Topic
+        run: |
+          topic_name="ada_librdkafka_group_sharing_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          container_id="$(docker compose -f integration/docker-compose.yml ps -q kafka)"
+
+          if [[ -z "${container_id}" ]]; then
+            echo "kafka container was not created" >&2
+            exit 1
+          fi
+
+          docker exec "${container_id}" \
+            kafka-topics \
+              --bootstrap-server localhost:29092 \
+              --create \
+              --if-not-exists \
+              --topic "${topic_name}" \
+              --partitions 2 \
+              --replication-factor 1 >/dev/null
+
+          echo "ADA_LIBRDKAFKA_GROUP_SHARING_TOPIC=${topic_name}" >> "${GITHUB_ENV}"
+
+      - name: Run Real Broker Group Sharing Test
+        run: alr -s "${XDG_CONFIG_HOME}/alire" -n exec -- ./bin/real_broker_group_sharing
 
       - name: Dump Kafka Logs On Failure
         if: failure()

@@ -17,6 +17,7 @@
   - polling and delivery-report counters
 - Mock-cluster helpers for integration testing through `librdkafka`'s built-in mock broker API
 - Standalone Ada test suite covering configuration, API contract checks, and queue behavior
+- Brokerless mock-cluster test suite covering produce/consume success paths
 - Optional real-broker smoke test using Docker Compose
 
 ## Project layout
@@ -25,14 +26,20 @@
 - `src/librdkafka_c.ads`: C imports for required `librdkafka` APIs
 - `src/ada_librdkafka-mock.ads|adb`: wrapper around mock-cluster APIs
 - `tests/`: standalone Ada test runner and test project
+- `tests/mock_cluster_tests.adb`: brokerless mock-cluster integration test executable
 - `tests/real_broker_smoke.adb`: real Kafka smoke test executable
 - `tests/real_broker_e2e.adb`: Docker-backed produce+consume e2e executable
 - `tests/real_broker_commit_replay.adb`: real Kafka commit/replay regression executable
+- `tests/real_broker_group_isolation.adb`: verifies independent consumer groups each read the full topic
+- `tests/real_broker_group_sharing.adb`: verifies two consumers in the same group split work across partitions
 - `scripts/build_librdkafka.sh`: builds/install vendored `librdkafka` into `vendor/librdkafka-install`
 - `scripts/run_unit_tests.sh`: builds and runs the standalone Ada unit suite
+- `scripts/run_mock_tests.sh`: builds and runs the brokerless mock-cluster suite
 - `scripts/run_real_kafka_smoke.sh`: starts local Kafka and runs real-broker smoke test
 - `scripts/run_real_kafka_e2e.sh`: starts local Kafka and runs produce+consume e2e test
 - `scripts/run_real_kafka_commit_replay.sh`: starts local Kafka and runs commit/replay regression
+- `scripts/run_real_kafka_group_isolation.sh`: starts local Kafka and runs the independent-group regression
+- `scripts/run_real_kafka_group_sharing.sh`: starts local Kafka, creates a two-partition topic, and runs the shared-group regression
 - `scripts/run_ci_suite.sh`: local full-suite runner matching the CI flow
 - `integration/docker-compose.yml`: local single-node Kafka (KRaft) for smoke tests
 - `vendor/librdkafka`: git submodule pinned to `librdkafka` `v2.13.2`
@@ -98,6 +105,12 @@ XDG_RUNTIME_DIR=/tmp TMPDIR=/tmp \
 alr -n exec -- ./bin/tests_main
 ```
 
+Brokerless mock-cluster suite:
+
+```bash
+./scripts/run_mock_tests.sh
+```
+
 ## Run the full local suite
 
 Requires Docker. This mirrors the CI flow locally:
@@ -132,15 +145,35 @@ sync commit prevents replay when the same consumer group reconnects:
 ./scripts/run_real_kafka_commit_replay.sh
 ```
 
+## Real broker group isolation regression
+
+Requires Docker. This verifies that two different consumer groups each observe
+the full topic independently:
+
+```bash
+./scripts/run_real_kafka_group_isolation.sh
+```
+
+## Real broker group sharing regression
+
+Requires Docker. This creates a two-partition topic and verifies that two
+consumers in the same group both receive work from that topic:
+
+```bash
+./scripts/run_real_kafka_group_sharing.sh
+```
+
 ## GitHub Actions CI
 
-CI orchestration lives in GitHub Actions rather than in one shell wrapper:
+CI orchestration lives in GitHub Actions and also has a local full-suite wrapper:
 
 - `.github/workflows/ci.yml`
+- `scripts/run_ci_suite.sh`
 
-The workflow builds vendored `librdkafka`, compiles all Ada targets, runs the
-standalone test suite, starts Kafka with Docker Compose, and then runs the
-broker-backed executables as separate CI steps.
+The workflow and local suite build vendored `librdkafka`, compile all Ada
+targets, run the standalone and mock-cluster suites, start Kafka with Docker
+Compose, and then run the broker-backed executables including the independent
+consumer-group regression.
 
 ## License
 

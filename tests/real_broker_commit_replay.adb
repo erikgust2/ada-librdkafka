@@ -13,7 +13,8 @@ procedure Real_Broker_Commit_Replay is
    subtype Message_Index is Positive range 1 .. 3;
    type Seen_Array is array (Message_Index) of Boolean;
 
-   Topic_Name : constant String := "ada_librdkafka_commit_replay";
+   Topic_Name : constant String :=
+     Test_Support.Unique_Name ("ada_librdkafka_commit_replay");
    Message_Count : constant Natural := 3;
 
    function Build_Group_Id return String is

@@ -146,9 +146,9 @@ package Librdkafka_C is
      (Rkt        : Rd_Kafka_Topic_T_Access;
       Partition  : C_Int;
       Msgflags   : C_Int;
-      Payload    : Interfaces.C.Strings.chars_ptr;
+      Payload    : System.Address;
       Len        : C_Size_T;
-      Key        : Interfaces.C.Strings.chars_ptr;
+      Key        : System.Address;
       Keylen     : C_Size_T;
       Msg_Opaque : System.Address) return C_Int
      with Import,

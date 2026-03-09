@@ -1,7 +1,6 @@
 with Ada.Calendar;
 with Ada.Exceptions;
 with Ada.Streams;
-with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
 with Ada_Librdkafka;
@@ -9,11 +8,13 @@ with Test_Support;
 
 procedure Real_Broker_E2E is
    use Ada.Streams;
-   use Ada.Strings.Unbounded;
    use Ada.Text_IO;
 
-   Topic_Name  : constant String := "ada_librdkafka_e2e";
-   Message_Cnt : constant Positive := 3;
+   subtype Message_Index is Positive range 1 .. 3;
+   type Seen_Array is array (Message_Index) of Boolean;
+
+   Topic_Name  : constant String := Test_Support.Unique_Name ("ada_librdkafka_e2e");
+   Message_Cnt : constant Positive := Message_Index'Last;
 
    function Build_Group_Id return String is
       use Ada.Calendar;
@@ -21,6 +22,27 @@ procedure Real_Broker_E2E is
    begin
       return "ada_e2e_" & Raw (Raw'First + 1 .. Raw'Last);
    end Build_Group_Id;
+
+   function Expected_Key (Index : Message_Index) return String is
+   begin
+      return "e2e_key_" & Integer'Image (Integer (Index));
+   end Expected_Key;
+
+   function Expected_Payload (Index : Message_Index) return String is
+   begin
+      return "e2e_payload_" & Integer'Image (Integer (Index));
+   end Expected_Payload;
+
+   function All_Seen (Seen : Seen_Array) return Boolean is
+   begin
+      for Value of Seen loop
+         if not Value then
+            return False;
+         end if;
+      end loop;
+
+      return True;
+   end All_Seen;
 
    Group_Id : constant String := Build_Group_Id;
 
@@ -53,17 +75,16 @@ procedure Real_Broker_E2E is
            3 => Ada_Librdkafka.KV ("auto.offset.reset", "earliest"),
            4 => Ada_Librdkafka.KV ("enable.auto.commit", "false")));
 
-   Seen_Count : Natural := 0;
+   Seen : Seen_Array := (others => False);
 begin
    Ada_Librdkafka.Reset_Delivery_Reports (Producer);
 
-   for I in 1 .. Message_Cnt loop
+   for I in Message_Index loop
       Ada_Librdkafka.Produce
         (Producer => Producer,
          Topic    => Topic_Name,
-         Payload  => Ada_Librdkafka.To_Bytes
-           ("e2e_payload_" & Integer'Image (I)),
-         Key      => Ada_Librdkafka.To_Bytes ("e2e_key"));
+         Payload  => Ada_Librdkafka.To_Bytes (Expected_Payload (I)),
+         Key      => Ada_Librdkafka.To_Bytes (Expected_Key (I)));
    end loop;
 
    Ada_Librdkafka.Flush (Producer, Timeout_Ms => 15_000);
@@ -111,34 +132,64 @@ begin
                raise;
          end;
 
+         if Metadata.Error_Code /= 0 then
+            raise Program_Error with
+              "unexpected consumer event error code" &
+              Integer'Image (Metadata.Error_Code);
+         end if;
+
          if Metadata.Has_Message then
-            if not Metadata.Topic_Truncated
-              and then Ada_Librdkafka.To_String
-                (Slice (Topic_Buffer, Topic_Used)) = Topic_Name
-              and then not Metadata.Payload_Truncated
-              and then not Metadata.Key_Truncated
-              and then
-                Ada_Librdkafka.To_String
-                  (Slice (Payload_Buffer, Payload_Used))'Length > 0
-              and then Ada_Librdkafka.To_String
-                (Slice (Key_Buffer, Key_Used)) = "e2e_key"
+            if Metadata.Topic_Truncated
+              or else Metadata.Payload_Truncated
+              or else Metadata.Key_Truncated
             then
-               Seen_Count := Seen_Count + 1;
+               raise Program_Error with
+                 "received truncated topic, key, or payload buffer";
             end if;
+
+            declare
+               Received_Topic : constant String :=
+                 Ada_Librdkafka.To_String (Slice (Topic_Buffer, Topic_Used));
+               Received_Key : constant String :=
+                 Ada_Librdkafka.To_String (Slice (Key_Buffer, Key_Used));
+               Received_Payload : constant String :=
+                 Ada_Librdkafka.To_String
+                   (Slice (Payload_Buffer, Payload_Used));
+               Matched : Boolean := False;
+            begin
+               if Received_Topic /= Topic_Name then
+                  raise Program_Error with
+                    "received unexpected topic " & Received_Topic;
+               end if;
+
+               for Index in Message_Index loop
+                  if Received_Key = Expected_Key (Index)
+                    and then Received_Payload = Expected_Payload (Index)
+                  then
+                     Seen (Index) := True;
+                     Matched := True;
+                     exit;
+                  end if;
+               end loop;
+
+               if not Matched then
+                  raise Program_Error with
+                    "received unexpected key/payload pair";
+               end if;
+            end;
          end if;
       end;
 
-      exit when Seen_Count >= Message_Cnt;
+      exit when All_Seen (Seen);
       delay 0.05;
    end loop;
 
    Ada_Librdkafka.Commit (Consumer, Async => False);
    Ada_Librdkafka.Close_Consumer (Consumer);
 
-   if Seen_Count < Message_Cnt then
+   if not All_Seen (Seen) then
       raise Program_Error with
-        "consume mismatch; expected " & Integer'Image (Message_Cnt) &
-        " got " & Integer'Image (Seen_Count);
+        "consumer did not observe all expected key/payload pairs";
    end if;
 
    Put_Line ("PASS real broker e2e produce+consume");
